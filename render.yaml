@@ -42,7 +42,6 @@ services:
     runtime: static
     rootDir: frontend
     plan: free
-    region: singapore
     buildCommand: npm install && npm run build
     staticPublishPath: dist
     headers:
