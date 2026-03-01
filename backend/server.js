@@ -353,6 +353,25 @@ app.get('/api/stock/:symbol', async (req, res) => {
 });
 
 const PORT = process.env.PORT || 5000;
-app.listen(PORT, () => {
-    console.log(`Backend proxy running on port ${PORT}`);
-});
+
+// Auto-create/sync DB tables on every startup (works for PostgreSQL and SQLite)
+async function startServer() {
+    try {
+        const { execSync } = await import('child_process');
+        console.log('Running prisma db push to sync schema...');
+        execSync('npx prisma db push --accept-data-loss', {
+            stdio: 'inherit',
+            env: process.env
+        });
+        console.log('Database schema synced successfully.');
+    } catch (err) {
+        console.error('Warning: prisma db push failed:', err.message);
+        // Continue anyway — tables might already exist
+    }
+
+    app.listen(PORT, () => {
+        console.log(`Backend proxy running on port ${PORT}`);
+    });
+}
+
+startServer();
