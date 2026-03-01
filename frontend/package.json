@@ -15,7 +15,6 @@
     "@tailwindcss/typography": "^0.5.19",
     "axios": "^1.13.6",
     "countup.js": "^2.9.0",
-    "finnhub": "^2.0.13",
     "framer-motion": "^12.34.3",
     "gsap": "^3.14.2",
     "lightweight-charts": "^5.1.0",
