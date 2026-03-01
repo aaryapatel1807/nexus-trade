@@ -107,8 +107,10 @@ function CreateAlertModal({ onClose, onCreate }) {
 export function Alerts() {
     const [activeTab, setActiveTab] = useState('active')
     const [alerts, setAlerts] = useState(() => {
-        const saved = localStorage.getItem('nexus_alerts')
-        if (saved) return JSON.parse(saved)
+        try {
+            const saved = localStorage.getItem('nexus_alerts')
+            if (saved && saved !== 'undefined') return JSON.parse(saved)
+        } catch (e) { localStorage.removeItem('nexus_alerts') }
         return []
     })
     const [showCreate, setShowCreate] = useState(false)

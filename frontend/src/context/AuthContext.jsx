@@ -19,9 +19,15 @@ export const AuthProvider = ({ children }) => {
         const token = localStorage.getItem('nexus_token');
         const userData = localStorage.getItem('nexus_user');
 
-        if (token && userData) {
-            setUser(JSON.parse(userData));
-            axios.defaults.headers.common['Authorization'] = `Bearer ${token}`;
+        if (token && userData && userData !== 'undefined' && userData !== 'null') {
+            try {
+                setUser(JSON.parse(userData));
+                axios.defaults.headers.common['Authorization'] = `Bearer ${token}`;
+            } catch (e) {
+                // Corrupted data — clear it so the app can start fresh
+                localStorage.removeItem('nexus_token');
+                localStorage.removeItem('nexus_user');
+            }
         }
         setLoading(false);
     }, []);
