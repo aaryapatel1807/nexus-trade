@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { apiFetch } from '../../lib/api'
 
 export function TickerTape() {
     const scrollRef = useRef(null)
@@ -15,7 +16,7 @@ export function TickerTape() {
     useEffect(() => {
         const fetchTickers = async () => {
             try {
-                const res = await fetch('/api/stocks?symbols=RELIANCE.NS,TCS.NS,HDFCBANK.NS,INFY.NS,SBIN.NS,BHARTIARTL.NS,ITC.NS')
+                const res = await apiFetch('/api/stocks?symbols=RELIANCE.NS,TCS.NS,HDFCBANK.NS,INFY.NS,SBIN.NS,BHARTIARTL.NS,ITC.NS')
                 const data = await res.json()
                 if (data && data.length > 0) {
                     setTickers(data.map(t => ({

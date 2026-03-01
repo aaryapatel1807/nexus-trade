@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { DashboardLayout } from '../components/layout/DashboardLayout'
 import { MarketGalaxy } from '../components/3d/MarketGalaxy'
 import { TrendingUp, TrendingDown, Clock, Activity, ExternalLink, Newspaper } from 'lucide-react'
+import { apiFetch } from '../lib/api'
 
 // News source favicon with fallback
 const SourceFavicon = ({ url }) => {
@@ -45,7 +46,7 @@ export function Markets() {
         const fetchIndices = async () => {
             try {
                 // Testing specific index symbols that work cleanly with Yahoo Finance India
-                const res = await fetch(`/api/stocks?symbols=${encodeURIComponent('^NSEI,^BSESN,^NSEBANK,^CNXIT')}`)
+                const res = await apiFetch(`/api/stocks?symbols=${encodeURIComponent('^NSEI,^BSESN,^NSEBANK,^CNXIT')}`)
                 const data = await res.json()
 
                 if (data && data.length > 0 && isMounted) {
@@ -90,7 +91,7 @@ export function Markets() {
         const fetchNews = async () => {
             setNewsLoading(true)
             try {
-                const res = await fetch('/api/news')
+                const res = await apiFetch('/api/news')
                 const data = await res.json()
                 if (Array.isArray(data)) setNews(data)
             } catch (err) {
@@ -108,7 +109,7 @@ export function Markets() {
     useEffect(() => {
         const fetchMovers = async () => {
             try {
-                const res = await fetch('/api/scanner')
+                const res = await apiFetch('/api/scanner')
                 const data = await res.json()
                 if (Array.isArray(data)) {
                     const sorted = [...data].sort((a, b) => Math.abs(b.change) - Math.abs(a.change))

@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import { apiFetch } from '../../lib/api'
 
 const SECTORS = [
     {
@@ -71,7 +72,7 @@ export function MarketGalaxy({ activeTab = 'Tech' }) {
         const fetchData = async () => {
             try {
                 const allSyms = SECTORS.flatMap(s => s.stocks.map(st => st.sym)).join(',')
-                const res = await fetch(`/api/scanner`)
+                const res = await apiFetch(`/api/scanner`)
                 const data = await res.json()
 
                 if (Array.isArray(data)) {

@@ -3,6 +3,7 @@ import { LineChart, Line, ResponsiveContainer, XAxis, YAxis, Tooltip } from 'rec
 import { DashboardLayout, CompanyLogo } from '../components/layout/DashboardLayout'
 import { TrendingUp, TrendingDown, Maximize2, Activity, Zap, Newspaper, ExternalLink } from 'lucide-react'
 import { TradeTerminal } from '../components/trading/TradeTerminal'
+import { apiFetch } from '../lib/api'
 
 // Placeholder for smaller components
 const GlassCard = ({ children, className = "" }) => (
@@ -72,7 +73,7 @@ export function Dashboard() {
     useEffect(() => {
         const fetchWatchlist = async () => {
             try {
-                const res = await fetch('/api/stocks?symbols=RELIANCE.NS,TCS.NS,HDFCBANK.NS,INFY.NS,SBIN.NS')
+                const res = await apiFetch('/api/stocks?symbols=RELIANCE.NS,TCS.NS,HDFCBANK.NS,INFY.NS,SBIN.NS')
                 const data = await res.json()
                 if (data && data.length > 0) {
                     setWatchlist(data.map(d => ({
@@ -97,7 +98,7 @@ export function Dashboard() {
         const fetchScanner = async () => {
             setScannerLoading(true)
             try {
-                const res = await fetch('/api/scanner')
+                const res = await apiFetch('/api/scanner')
                 const data = await res.json()
                 if (Array.isArray(data)) {
                     // Sort by absolute change to get top movers
@@ -117,7 +118,7 @@ export function Dashboard() {
         const fetchNews = async () => {
             setNewsLoading(true)
             try {
-                const res = await fetch('/api/news')
+                const res = await apiFetch('/api/news')
                 const data = await res.json()
                 if (Array.isArray(data)) setNews(data.slice(0, 8))
             } catch (err) { console.error('News error:', err) }

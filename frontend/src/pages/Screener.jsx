@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { DashboardLayout, CompanyLogo } from '../components/layout/DashboardLayout'
 import { Filter, Sparkles, TrendingUp, TrendingDown, ChevronDown, RefreshCw } from 'lucide-react'
+import { apiFetch } from '../lib/api'
 
 const GlassCard = ({ children, className = "" }) => (
     <div className={`bg-surface/60 backdrop-blur-lg border border-white/5 rounded-2xl p-6 ${className}`}>
@@ -21,7 +22,7 @@ export function Screener() {
     const fetchScannerData = async () => {
         setIsLoading(true)
         try {
-            const res = await fetch('/api/scanner')
+            const res = await apiFetch('/api/scanner')
             const data = await res.json()
             if (Array.isArray(data)) {
                 setResults(data)

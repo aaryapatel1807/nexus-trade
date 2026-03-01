@@ -4,6 +4,7 @@ import { Send, Bot, User, Mic, Paperclip, Download, MoreVertical, TrendingUp, Ac
 import axios from 'axios'
 import { useAuth } from '../context/AuthContext'
 import ReactMarkdown from 'react-markdown'
+import { apiFetch } from '../lib/api'
 
 // Placeholder for smaller components
 const GlassCard = ({ children, className = "" }) => (
@@ -37,7 +38,7 @@ export function AIAdvisor() {
     useEffect(() => {
         const fetchInsights = async () => {
             try {
-                const res = await fetch('/api/scanner')
+                const res = await apiFetch('/api/scanner')
                 const data = await res.json()
                 if (Array.isArray(data)) {
                     // Find actual strong buys to feature in the sidebar

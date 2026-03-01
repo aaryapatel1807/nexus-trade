@@ -56,4 +56,4 @@ services:
         fromService:
           name: nexus-trade-backend
           type: web
-          property: host
+          property: url
