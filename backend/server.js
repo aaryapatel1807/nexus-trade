@@ -1,12 +1,19 @@
 import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
-import finnhub from 'finnhub';
+import { createRequire } from 'module';
+const require = createRequire(import.meta.url);
+const finnhub = require('finnhub');
 
-// Setup Finnhub API Client
-const api_key = finnhub.ApiClient.instance.authentications['api_key'];
-api_key.apiKey = process.env.FINNHUB_API_KEY || '';
-const finnhubClient = new finnhub.DefaultApi();
+// Setup Finnhub API Client (safe guard in case key not provided)
+let finnhubClient = null;
+try {
+    const api_key = finnhub.ApiClient.instance.authentications['api_key'];
+    api_key.apiKey = process.env.FINNHUB_API_KEY || '';
+    finnhubClient = new finnhub.DefaultApi();
+} catch (e) {
+    console.warn('Finnhub init failed, will use Yahoo Finance as fallback:', e.message);
+}
 
 import authRoutes from './routes/auth.js';
 import tradeRoutes from './routes/trade.js';
