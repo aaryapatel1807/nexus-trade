@@ -11,7 +11,6 @@ services:
     runtime: node
     rootDir: backend
     plan: free
-    region: singapore
     buildCommand: npm install && npx prisma generate
     startCommand: npx prisma db push --accept-data-loss && node server.js
     healthCheckPath: /api/stocks
