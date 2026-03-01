@@ -21,24 +21,23 @@ import chatRoutes from './routes/chat.js';
 
 const app = express();
 
-// Allow requests from the frontend (local dev + Railway production)
-const allowedOrigins = [
-    'http://localhost:5173',
-    'http://localhost:4173',
-    process.env.FRONTEND_URL, // Set this to your Railway frontend URL in production
-].filter(Boolean)
-
+// Allow requests from localhost (dev) and any *.onrender.com subdomain (production)
 app.use(cors({
     origin: (origin, callback) => {
-        // Allow requests with no origin (Postman, curl, server-to-server)
-        if (!origin || allowedOrigins.includes(origin)) {
-            callback(null, true)
+        // Allow: no origin (server-to-server, Postman), localhost, or any Render-hosted frontend
+        if (
+            !origin ||
+            origin.startsWith('http://localhost') ||
+            origin.endsWith('.onrender.com') ||
+            origin === process.env.FRONTEND_URL
+        ) {
+            callback(null, true);
         } else {
-            callback(new Error(`CORS: Origin ${origin} not allowed`))
+            callback(new Error(`CORS: Origin ${origin} not allowed`));
         }
     },
     credentials: true
-}))
+}));
 app.use(express.json());
 
 // Main App Routes
