@@ -27,9 +27,9 @@ services:
       - key: JWT_SECRET
         generateValue: true        # Render auto-generates a secure random secret ✅
       - key: GEMINI_API_KEY
-        sync: false                # You will fill this in manually in the Render dashboard
+        value: AIzaSyA7c9il1CqVA6_mj4InnHbB2GCuYtzF39s
       - key: FINNHUB_API_KEY
-        sync: false                # Optional - fill in manually
+        value: d6i80ohr01ql9cifa67gd6i80ohr01ql9cifa680
       - key: FRONTEND_URL
         fromService:
           name: nexus-trade-frontend
