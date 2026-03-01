@@ -1,16 +1,7 @@
-import { createRequire } from 'module';
-import path from 'path';
-import url from 'url';
+import { PrismaClient } from '@prisma/client';
 
-const require = createRequire(import.meta.url);
-const { PrismaClient } = require('@prisma/client');
-
-// Use the explicit file URL for SQLite to guarantee connection
-const __dirname = path.dirname(url.fileURLToPath(import.meta.url));
-const dbUrl = `file:${path.join(__dirname, 'prisma', 'dev.db')}`;
-
-const prisma = new PrismaClient({
-    datasourceUrl: dbUrl,
-});
+// In production (Render), DATABASE_URL points to PostgreSQL.
+// In local dev, fall back to the SQLite file.
+const prisma = new PrismaClient();
 
 export default prisma;
