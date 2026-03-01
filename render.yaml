@@ -1,0 +1,61 @@
+databases:
+  - name: nexus-trade-db
+    databaseName: nexus_trade_db
+    user: nexus_trade_db_user
+    plan: free
+
+services:
+  # ─── Backend (Node.js) ───────────────────────────────────────────────────────
+  - type: web
+    name: nexus-trade-backend
+    runtime: node
+    rootDir: backend
+    plan: free
+    region: singapore
+    buildCommand: npm install && npx prisma generate
+    startCommand: node server.js
+    healthCheckPath: /api/stocks
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 5000
+      - key: DATABASE_URL
+        fromDatabase:
+          name: nexus-trade-db
+          property: connectionString
+      - key: JWT_SECRET
+        generateValue: true        # Render auto-generates a secure random secret ✅
+      - key: GEMINI_API_KEY
+        sync: false                # You will fill this in manually in the Render dashboard
+      - key: FINNHUB_API_KEY
+        sync: false                # Optional - fill in manually
+      - key: FRONTEND_URL
+        fromService:
+          name: nexus-trade-frontend
+          type: web
+          property: host
+
+  # ─── Frontend (React/Vite Static Site) ───────────────────────────────────────
+  - type: web
+    name: nexus-trade-frontend
+    runtime: static
+    rootDir: frontend
+    plan: free
+    region: singapore
+    buildCommand: npm install && npm run build
+    staticPublishPath: dist
+    headers:
+      - path: /*
+        name: X-Frame-Options
+        value: DENY
+    routes:
+      - type: rewrite
+        source: /*
+        destination: /index.html
+    envVars:
+      - key: VITE_API_URL
+        fromService:
+          name: nexus-trade-backend
+          type: web
+          property: host
