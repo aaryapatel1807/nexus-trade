@@ -1,0 +1,46 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = "file:./dev.db"
+}
+
+model User {
+  id           Int      @id @default(autoincrement())
+  email        String   @unique
+  passwordHash String
+  name         String?
+  cashBalance  Float    @default(100000.0) // Start with $100k for paper trading
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  portfolios   Portfolio[]
+  transactions Transaction[]
+}
+
+model Portfolio {
+  id           Int      @id @default(autoincrement())
+  userId       Int
+  symbol       String
+  quantity     Int      @default(0)
+  averagePrice Float    @default(0.0)
+  updatedAt    DateTime @updatedAt
+
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, symbol]) // A user can only have one portfolio entry per stock
+}
+
+model Transaction {
+  id        Int      @id @default(autoincrement())
+  userId    Int
+  symbol    String
+  type      String   // "BUY" or "SELL"
+  quantity  Int
+  price     Float
+  timestamp DateTime @default(now())
+
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}

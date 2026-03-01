@@ -1,0 +1,1 @@
+const fs = require('fs'); try { const yf = require('yahoo-finance2').default; yf.quote('RELIANCE.NS').then(res => fs.writeFileSync('out.txt', JSON.stringify(res))).catch(e => fs.writeFileSync('out.txt', e.toString() + '\n' + e.stack)); } catch(e) { fs.writeFileSync('out.txt', e.toString()); }
