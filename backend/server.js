@@ -354,23 +354,53 @@ app.get('/api/stock/:symbol', async (req, res) => {
 
 const PORT = process.env.PORT || 5000;
 
-// Auto-create/sync DB tables on every startup (works for PostgreSQL and SQLite)
+import prisma from './prisma.js';
+
+// Auto-create tables on startup using raw SQL — no CLI needed
 async function startServer() {
     try {
-        const { execSync } = await import('child_process');
-        console.log('Running prisma db push to sync schema...');
-        execSync('npx prisma db push --accept-data-loss', {
-            stdio: 'inherit',
-            env: process.env
-        });
-        console.log('Database schema synced successfully.');
+        console.log('Connecting to database and creating tables if needed...');
+        await prisma.$executeRawUnsafe(`
+            CREATE TABLE IF NOT EXISTS "User" (
+                "id"           SERIAL PRIMARY KEY,
+                "email"        TEXT    NOT NULL UNIQUE,
+                "passwordHash" TEXT    NOT NULL,
+                "name"         TEXT    DEFAULT '',
+                "cashBalance"  FLOAT8  DEFAULT 100000.0,
+                "createdAt"    TIMESTAMPTZ DEFAULT NOW(),
+                "updatedAt"    TIMESTAMPTZ DEFAULT NOW()
+            );
+        `);
+        await prisma.$executeRawUnsafe(`
+            CREATE TABLE IF NOT EXISTS "Portfolio" (
+                "id"           SERIAL PRIMARY KEY,
+                "userId"       INTEGER NOT NULL REFERENCES "User"("id") ON DELETE CASCADE,
+                "symbol"       TEXT    NOT NULL,
+                "quantity"     INTEGER DEFAULT 0,
+                "averagePrice" FLOAT8  DEFAULT 0.0,
+                "updatedAt"    TIMESTAMPTZ DEFAULT NOW(),
+                UNIQUE ("userId", "symbol")
+            );
+        `);
+        await prisma.$executeRawUnsafe(`
+            CREATE TABLE IF NOT EXISTS "Transaction" (
+                "id"        SERIAL PRIMARY KEY,
+                "userId"    INTEGER NOT NULL REFERENCES "User"("id") ON DELETE CASCADE,
+                "symbol"    TEXT    NOT NULL,
+                "type"      TEXT    NOT NULL,
+                "quantity"  INTEGER NOT NULL,
+                "price"     FLOAT8  NOT NULL,
+                "timestamp" TIMESTAMPTZ DEFAULT NOW()
+            );
+        `);
+        console.log('✅ Database tables ready.');
     } catch (err) {
-        console.error('Warning: prisma db push failed:', err.message);
-        // Continue anyway — tables might already exist
+        console.error('⚠ Table creation warning:', err.message);
+        // Continue starting the server — tables may already exist
     }
 
     app.listen(PORT, () => {
-        console.log(`Backend proxy running on port ${PORT}`);
+        console.log(`🚀 Backend running on port ${PORT}`);
     });
 }
 
