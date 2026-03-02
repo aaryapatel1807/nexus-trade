@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 import { Link, useLocation } from 'react-router-dom'
 import { LineChart, PieChart, Activity, Globe, Bell, Settings, Command, Search, User, LogOut, X, TrendingUp, TrendingDown, Building2, Users, Globe2, ExternalLink } from 'lucide-react'
 import { useAuth } from '../../context/AuthContext'
+import { apiFetch } from '../../lib/api'
 
 // ─── Universal Stock Logo Component (Clearbit + Google Favicon fallback) ───
 const DOMAIN_MAP = {
@@ -213,7 +214,7 @@ export function DashboardLayout({ children }) {
         if (!q.trim()) { setSearchResults([]); setShowDropdown(false); return }
         setIsSearching(true)
         try {
-            const res = await fetch(`/api/search?q=${encodeURIComponent(q)}`)
+            const res = await apiFetch(`/api/search?q=${encodeURIComponent(q)}`)
             const data = await res.json()
             setSearchResults(data)
             setShowDropdown(true)
@@ -244,9 +245,9 @@ export function DashboardLayout({ children }) {
     // Live header indices
     const [hdr, setHdr] = useState({ nifty: null, sensex: null, vix: null })
     useEffect(() => {
-        const fetch = async () => {
+        const fetchData = async () => {
             try {
-                const res = await window.fetch(`/api/stocks?symbols=${encodeURIComponent('^NSEI,^BSESN,^VIX')}`)
+                const res = await apiFetch(`/api/stocks?symbols=${encodeURIComponent('^NSEI,^BSESN,^VIX')}`)
                 const data = await res.json()
                 if (Array.isArray(data)) {
                     const n = data.find(d => d.sym === '^NSEI')
@@ -260,8 +261,8 @@ export function DashboardLayout({ children }) {
                 }
             } catch { }
         }
-        fetch()
-        const t = setInterval(fetch, 60000)
+        fetchData()
+        const t = setInterval(fetchData, 60000)
         return () => clearInterval(t)
     }, [])
 
