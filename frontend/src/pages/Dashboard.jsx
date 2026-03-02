@@ -53,7 +53,7 @@ export function Dashboard() {
             }
             setIsChartLoading(true)
             try {
-                const res = await fetch(
+                const res = await apiFetch(
                     `/api/stocks/history?symbol=${sym}&period=${activeChartTimeframe.toLowerCase()}`,
                     { signal: controller.signal }
                 )
