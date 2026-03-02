@@ -47,9 +47,33 @@ app.use('/api/chat', chatRoutes);
 
 import YahooFinance from 'yahoo-finance2';
 
-const yahooFinance = typeof YahooFinance === 'function'
-    ? new YahooFinance({ suppressNotices: ['yahooSurvey'] })
-    : YahooFinance;
+const YF_HEADERS = {
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+    'Accept': 'application/json',
+    'Accept-Language': 'en-US,en;q=0.9',
+    'Origin': 'https://finance.yahoo.com',
+    'Referer': 'https://finance.yahoo.com/',
+};
+
+// Fetch a quote directly from Yahoo Finance API (no library, browser-like headers)
+async function fetchYahooQuote(symbol) {
+    const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?interval=1d&range=1d`;
+    const r = await fetch(url, { headers: YF_HEADERS });
+    if (!r.ok) throw new Error(`Yahoo HTTP ${r.status} for ${symbol}`);
+    const json = await r.json();
+    const meta = json?.chart?.result?.[0]?.meta;
+    if (!meta) throw new Error(`No meta for ${symbol}`);
+    return {
+        regularMarketPrice: meta.regularMarketPrice || meta.chartPreviousClose || 0,
+        regularMarketChangePercent: meta.regularMarketPrice && meta.chartPreviousClose
+            ? ((meta.regularMarketPrice - meta.chartPreviousClose) / meta.chartPreviousClose * 100)
+            : 0,
+        shortName: meta.instrumentType === 'EQUITY' ? symbol.replace('.NS', '').replace('.BO', '') : symbol,
+        marketCap: 0,
+        forwardPE: null,
+        trailingPE: null,
+    };
+}
 
 app.get('/api/stocks', async (req, res) => {
     try {
@@ -57,39 +81,38 @@ app.get('/api/stocks', async (req, res) => {
         const symbols = symbolsStr.split(',');
 
         const results = await Promise.all(symbols.map(async (sym) => {
+            const returnSym = sym.startsWith('^') ? sym : sym.replace('.NS', '').replace('.BO', '');
             try {
-                const quote = await yahooFinance.quote(sym);
-                const returnSym = sym.startsWith('^') ? sym : sym.replace('.NS', '');
-
+                // Try direct fetch first, then library as fallback
+                let quote;
+                try {
+                    quote = await fetchYahooQuote(sym);
+                } catch {
+                    const yf = typeof YahooFinance === 'function' ? new YahooFinance() : YahooFinance;
+                    quote = await yf.quote(sym, {}, { validateResult: false });
+                }
                 return {
                     sym: returnSym,
                     name: quote.shortName || quote.longName || returnSym,
-                    price: quote.regularMarketPrice,
-                    change: quote.regularMarketChangePercent,
+                    price: quote.regularMarketPrice || 0,
+                    change: quote.regularMarketChangePercent || 0,
                     value: quote.marketCap || 0,
                     pe: quote.forwardPE || quote.trailingPE || 'N/A',
                     cap: quote.marketCap ? (quote.marketCap / 1e9).toFixed(1) + 'B' : 'N/A'
                 };
             } catch (err) {
                 console.error(`Failed fetching ${sym}:`, err.message);
-                return {
-                    sym: sym.replace('.NS', ''),
-                    name: sym.replace('.NS', ''),
-                    price: 0,
-                    change: 0,
-                    value: 0,
-                    pe: 'N/A',
-                    cap: 'N/A'
-                };
+                return { sym: returnSym, name: returnSym, price: 0, change: 0, value: 0, pe: 'N/A', cap: 'N/A' };
             }
         }));
 
         res.json(results);
     } catch (error) {
-        console.error('Error serving real live data:', error);
-        res.status(500).json({ error: 'Failed to fetch authentic stock data' });
+        console.error('Error serving stock data:', error);
+        res.status(500).json({ error: 'Failed to fetch stock data' });
     }
 });
+
 
 app.get('/api/stocks/history', async (req, res) => {
     try {
