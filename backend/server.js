@@ -85,9 +85,14 @@ app.get('/api/stocks', async (req, res) => {
                 try {
                     quote = await fetchFinnhubQuote(sym);
                 } catch (fhErr) {
-                    console.log(`Finnhub failed for ${sym} (${fhErr.message}), trying Yahoo...`);
-                    const yf = typeof YahooFinance === 'function' ? new YahooFinance() : YahooFinance;
-                    quote = await yf.quote(sym, {}, { validateResult: false });
+                    console.error(`[CLOUD DEBUG] Finnhub failed for ${sym}:`, fhErr.message);
+                    try {
+                        const yf = typeof YahooFinance === 'function' ? new YahooFinance() : YahooFinance;
+                        quote = await yf.quote(sym, {}, { validateResult: false });
+                    } catch (yfErr) {
+                        console.error(`[CLOUD DEBUG] Yahoo fallback failed for ${sym}:`, yfErr.message);
+                        throw new Error('Both Finnhub and Yahoo failed');
+                    }
                 }
                 return {
                     sym: returnSym,
@@ -99,7 +104,7 @@ app.get('/api/stocks', async (req, res) => {
                     cap: quote.marketCap ? (quote.marketCap / 1e9).toFixed(1) + 'B' : 'N/A'
                 };
             } catch (err) {
-                console.error(`Failed fetching ${sym}:`, err.message);
+                console.error(`[CLOUD DEBUG] Final failure for ${sym}: returning 0s`);
                 return { sym: returnSym, name: returnSym, price: 0, change: 0, value: 0, pe: 'N/A', cap: 'N/A' };
             }
         }));
