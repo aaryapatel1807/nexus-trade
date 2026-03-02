@@ -77,11 +77,18 @@ async function fetchGoogleFinanceQuote(sym) {
 
     const price = parseFloat(priceMatch[1].replace(/,/g, ''));
 
-    // Try to extract previous close or percentage change safely
+    // Extract percentage change safely without relying on unstable CSS classes
     let changePercent = 0;
-    const changeMatch = html.match(/class="JwB6kf"[^>]*>([+-]?[0-9,.]+)%</);
-    if (changeMatch) {
-        changePercent = parseFloat(changeMatch[1]);
+    // Look for a > followed by an optional +/- then digits and a % sign then <
+    const rx = />([+-]?[0-9,.]+)%</g;
+    let m;
+    let foundChanges = [];
+    while ((m = rx.exec(html)) !== null) {
+        foundChanges.push(parseFloat(m[1]));
+    }
+    // Google Finance HTML usually has the main day's change as the first valid match
+    if (foundChanges.length > 0) {
+        changePercent = foundChanges[0];
     }
 
     return {
