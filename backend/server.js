@@ -84,11 +84,14 @@ async function fetchGoogleFinanceQuote(sym) {
     if (!r.ok) throw new Error(`Google Finance HTTP ${r.status}`);
     const html = await r.text();
 
-    // Regex to extract the main price div (e.g., <div class="YMlKec fxKbKc">₹1,394.90</div>)
-    const priceMatch = html.match(/class="YMlKec fxKbKc"[^>]*>[^0-9]*([0-9,.]+)</);
+    // Robust price extraction: find the class then the next tag content
+    const priceStart = html.indexOf('class="YMlKec fxKbKc"');
+    if (priceStart === -1) throw new Error(`Could not find price class for ${sym}`);
+    const priceMatch = html.slice(priceStart, priceStart + 150).match(/>([^<]+)</);
     if (!priceMatch) throw new Error(`Could not parse price for ${sym}`);
 
-    const price = parseFloat(priceMatch[1].replace(/,/g, ''));
+    // Remove currency symbols, commas, etc.
+    const price = parseFloat(priceMatch[1].replace(/[^0-9.]/g, ''));
 
     // Extract percentage change safely
     let changePercent = 0;
