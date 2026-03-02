@@ -344,7 +344,7 @@ app.get('/api/scanner', async (req, res) => {
 // STOCK SEARCH
 app.get('/api/search', async (req, res) => {
     try {
-        const q = req.query.q;
+        const q = (req.query.q || '').trim();
         if (!q || q.length < 1) return res.json([]);
 
         let mapped = [];
