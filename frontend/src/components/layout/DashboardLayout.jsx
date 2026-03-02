@@ -70,7 +70,7 @@ function StockDetailModal({ stock, onClose }) {
         const fetchDetails = async () => {
             setLoading(true)
             try {
-                const res = await fetch(`/api/stock/${stock.rawSym || stock.sym}`)
+                const res = await apiFetch(`/api/stock/${stock.rawSym || stock.sym}`)
                 const data = await res.json()
                 setDetails(data)
             } catch { }
