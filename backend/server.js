@@ -46,32 +46,29 @@ app.use('/api/trade', tradeRoutes);
 app.use('/api/chat', chatRoutes);
 
 import YahooFinance from 'yahoo-finance2';
+const FINNHUB_KEY = process.env.FINNHUB_API_KEY || '';
 
-const YF_HEADERS = {
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
-    'Accept': 'application/json',
-    'Accept-Language': 'en-US,en;q=0.9',
-    'Origin': 'https://finance.yahoo.com',
-    'Referer': 'https://finance.yahoo.com/',
-};
+// Convert Yahoo Finance symbol (RELIANCE.NS) → Finnhub symbol (NSE:RELIANCE)
+function toFinnhubSymbol(sym) {
+    if (sym.endsWith('.NS')) return `NSE:${sym.replace('.NS', '')}`;
+    if (sym.endsWith('.BO')) return `BSE:${sym.replace('.BO', '')}`;
+    return null; // indices like ^NSEI not supported
+}
 
-// Fetch a quote directly from Yahoo Finance API (no library, browser-like headers)
-async function fetchYahooQuote(symbol) {
-    const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?interval=1d&range=1d`;
-    const r = await fetch(url, { headers: YF_HEADERS });
-    if (!r.ok) throw new Error(`Yahoo HTTP ${r.status} for ${symbol}`);
-    const json = await r.json();
-    const meta = json?.chart?.result?.[0]?.meta;
-    if (!meta) throw new Error(`No meta for ${symbol}`);
+// Fetch quote from Finnhub REST API directly (no SDK needed)
+async function fetchFinnhubQuote(sym) {
+    const fhSym = toFinnhubSymbol(sym);
+    if (!fhSym || !FINNHUB_KEY) throw new Error('No Finnhub symbol or key');
+    const url = `https://finnhub.io/api/v1/quote?symbol=${encodeURIComponent(fhSym)}&token=${FINNHUB_KEY}`;
+    const r = await fetch(url);
+    if (!r.ok) throw new Error(`Finnhub HTTP ${r.status}`);
+    const d = await r.json();
+    if (!d.c || d.c === 0) throw new Error(`Finnhub returned 0 for ${fhSym}`);
     return {
-        regularMarketPrice: meta.regularMarketPrice || meta.chartPreviousClose || 0,
-        regularMarketChangePercent: meta.regularMarketPrice && meta.chartPreviousClose
-            ? ((meta.regularMarketPrice - meta.chartPreviousClose) / meta.chartPreviousClose * 100)
-            : 0,
-        shortName: meta.instrumentType === 'EQUITY' ? symbol.replace('.NS', '').replace('.BO', '') : symbol,
-        marketCap: 0,
-        forwardPE: null,
-        trailingPE: null,
+        regularMarketPrice: d.c,
+        regularMarketChangePercent: d.pc ? ((d.c - d.pc) / d.pc * 100) : 0,
+        shortName: sym.replace('.NS', '').replace('.BO', ''),
+        marketCap: 0, forwardPE: null, trailingPE: null,
     };
 }
 
@@ -83,11 +80,12 @@ app.get('/api/stocks', async (req, res) => {
         const results = await Promise.all(symbols.map(async (sym) => {
             const returnSym = sym.startsWith('^') ? sym : sym.replace('.NS', '').replace('.BO', '');
             try {
-                // Try direct fetch first, then library as fallback
+                // Try Finnhub first (works on cloud), fallback to Yahoo library
                 let quote;
                 try {
-                    quote = await fetchYahooQuote(sym);
-                } catch {
+                    quote = await fetchFinnhubQuote(sym);
+                } catch (fhErr) {
+                    console.log(`Finnhub failed for ${sym} (${fhErr.message}), trying Yahoo...`);
                     const yf = typeof YahooFinance === 'function' ? new YahooFinance() : YahooFinance;
                     quote = await yf.quote(sym, {}, { validateResult: false });
                 }
