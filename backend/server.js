@@ -55,26 +55,45 @@ function toFinnhubSymbol(sym) {
     return null; // indices like ^NSEI not supported
 }
 
-// Fetch quote from Finnhub REST API directly (no SDK needed)
-async function fetchFinnhubQuote(sym) {
-    const fhSym = toFinnhubSymbol(sym);
-    if (!fhSym || !FINNHUB_KEY) throw new Error('No Finnhub symbol or key');
-    const url = `https://finnhub.io/api/v1/quote?symbol=${encodeURIComponent(fhSym)}&token=${FINNHUB_KEY}`;
-    const r = await fetch(url);
-    if (!r.ok) throw new Error(`Finnhub HTTP ${r.status}`);
-    const d = await r.json();
-    if (!d.c || d.c === 0) throw new Error(`Finnhub returned 0 for ${fhSym}`);
+// Fetch quote by scraping Google Finance (Bypasses all API limits and cloud blocks)
+async function fetchGoogleFinanceQuote(sym) {
+    // Convert RELIANCE.NS -> BOM:RELIANCE or NSE:RELIANCE
+    const exchange = sym.endsWith('.BO') ? 'BOM' : 'NSE';
+    const cleanSym = sym.replace('.NS', '').replace('.BO', '');
+    const url = `https://www.google.com/finance/quote/${cleanSym}:${exchange}`;
+
+    const r = await fetch(url, {
+        headers: {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'
+        }
+    });
+
+    if (!r.ok) throw new Error(`Google Finance HTTP ${r.status}`);
+    const html = await r.text();
+
+    // Regex to extract the main price div (e.g., <div class="YMlKec fxKbKc">₹1,394.90</div>)
+    const priceMatch = html.match(/class="YMlKec fxKbKc"[^>]*>[^0-9]*([0-9,.]+)</);
+    if (!priceMatch) throw new Error(`Could not parse price for ${sym}`);
+
+    const price = parseFloat(priceMatch[1].replace(/,/g, ''));
+
+    // Try to extract previous close or percentage change safely
+    let changePercent = 0;
+    const changeMatch = html.match(/class="JwB6kf"[^>]*>([+-]?[0-9,.]+)%</);
+    if (changeMatch) {
+        changePercent = parseFloat(changeMatch[1]);
+    }
+
     return {
-        regularMarketPrice: d.c,
-        regularMarketChangePercent: d.pc ? ((d.c - d.pc) / d.pc * 100) : 0,
-        shortName: sym.replace('.NS', '').replace('.BO', ''),
+        regularMarketPrice: price,
+        regularMarketChangePercent: changePercent,
+        shortName: cleanSym,
         marketCap: 0, forwardPE: null, trailingPE: null,
     };
 }
 
 // --- In-Memory Cache for Stock Data ---
-// Finnhub limit: 60/min. Yahoo: Blocks cloud IPs.
-// Solution: Cache prices for 60 seconds.
+// Limits: Google Finance has no strict limits but caching helps speed.
 const cache = {
     quotes: {},   // { 'RELIANCE.NS': { data: {...}, timestamp: 12345 } }
     history: {}   // { 'RELIANCE.NS-1m': { data: [...], timestamp: 12345 } }
@@ -96,8 +115,8 @@ app.get('/api/stocks', async (req, res) => {
             }
 
             try {
-                // 2. Fetch fresh data from Finnhub
-                const quote = await fetchFinnhubQuote(sym);
+                // 2. Fetch fresh data from Google Finance HTML scraper
+                const quote = await fetchGoogleFinanceQuote(sym);
                 const newData = {
                     sym: returnSym,
                     name: quote.shortName || quote.longName || returnSym,
@@ -112,16 +131,15 @@ app.get('/api/stocks', async (req, res) => {
                 cache.quotes[sym] = { data: newData, timestamp: now };
                 return newData;
 
-            } catch (fhErr) {
-                console.error(`[CLOUD DEBUG] Finnhub failed for ${sym}:`, fhErr.message);
+            } catch (err) {
+                console.error(`[CLOUD DEBUG] Google Scraper failed for ${sym}:`, err.message);
 
-                // 4. Fallback to Stale Cache (better than 0)
+                // 4. Fallback to Stale Cache
                 if (cache.quotes[sym]) {
                     console.log(`Returning stale cache for ${sym}`);
                     return cache.quotes[sym].data;
                 }
 
-                // 5. Final fallback (will likely return 0s if Yahoo is blocked)
                 return { sym: returnSym, name: returnSym, price: 0, change: 0, value: 0, pe: 'N/A', cap: 'N/A' };
             }
         }));
@@ -157,20 +175,13 @@ app.get('/api/stocks/history', async (req, res) => {
         const config = periodMap[period] || periodMap['1m'];
         const isIntraday = ['15m', '5m', '1m', '30m', '60m', '1h'].includes(config.interval);
 
-        // Randomize User-Agent to evade Yahoo blocking
-        const agents = [
-            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
-            'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.3 Safari/605.1.15',
-            'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:123.0) Gecko/20100101 Firefox/123.0'
-        ];
-        const randomAgent = agents[Math.floor(Math.random() * agents.length)];
-
-        const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?range=${config.range}&interval=${config.interval}`;
+        // Scrape Yahoo Finance webpage directly (Bypasses API rate limits and 401 Unauthorized)
+        const url = `https://finance.yahoo.com/quote/${encodeURIComponent(symbol)}/history`;
         const YF_HEADERS = {
             'User-Agent': randomAgent,
-            'Accept': 'application/json',
-            'Origin': 'https://finance.yahoo.com',
-            'Referer': 'https://finance.yahoo.com/',
+            'Accept': 'text/html,application/xhtml+xml,application/xml',
+            'Accept-Language': 'en-US,en;q=0.9',
+            'Cache-Control': 'max-age=0',
         };
 
         const controller = new AbortController();
@@ -181,42 +192,35 @@ app.get('/api/stocks/history', async (req, res) => {
             const r = await fetch(url, { headers: YF_HEADERS, signal: controller.signal });
             clearTimeout(timeout);
 
-            if (!r.ok) throw new Error(`Yahoo HTTP ${r.status}`);
-            const json = await r.json();
+            if (!r.ok) throw new Error(`Yahoo HTML HTTP ${r.status}`);
+            const html = await r.text();
 
-            const result = json?.chart?.result?.[0];
-            if (result && result.timestamp && result.indicators?.quote?.[0]?.close) {
-                const timestamps = result.timestamp;
-                const closes = result.indicators.quote[0].close;
+            // Extract the embedded historical data from the page's React state
+            const stateMatch = html.match(/root\.App\.main\s*=\s*(\{.*?\});\s*\(function/);
+            if (!stateMatch) throw new Error('Could not parse Yahoo Finance React state');
 
-                for (let i = 0; i < timestamps.length; i++) {
-                    if (closes[i] !== null && closes[i] !== undefined) {
-                        const d = new Date(timestamps[i] * 1000);
-                        const label = isIntraday
-                            ? d.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: false })
-                            : d.toISOString().slice(5, 10).replace('-', '/');
+            const rawState = JSON.parse(stateMatch[1]);
+            const historicalData = rawState?.context?.dispatcher?.stores?.HistoricalPriceStore?.prices;
 
-                        formattedData.push({
-                            time: label,
-                            fullDate: d.toISOString(),
-                            value: parseFloat(closes[i].toFixed(2))
-                        });
-                    }
-                }
+            if (historicalData && Array.isArray(historicalData)) {
+                // Yahoo history is usually daily. We will take the last N days based on 'period'
+                const daysNeeded = period === '1d' ? 5 : (period === '1w' ? 7 : (period === '1m' ? 30 : 90));
+
+                // Sort ascending (oldest first)
+                const sorted = historicalData
+                    .filter(p => !p.type && p.close !== null)
+                    .sort((a, b) => a.date - b.date)
+                    .slice(-daysNeeded);
+
+                formattedData = sorted.map(p => {
+                    const d = new Date(p.date * 1000);
+                    const label = d.toISOString().slice(5, 10).replace('-', '/');
+                    return { time: label, fullDate: d.toISOString(), value: parseFloat(p.close.toFixed(2)) };
+                });
             }
         } catch (fetchErr) {
-            console.error(`Direct fetch failed for ${symbol}:`, fetchErr.message);
-            // Fallback to library just in case
-            const yf = typeof YahooFinance === 'function' ? new YahooFinance() : YahooFinance;
-            const fallback = await yf.chart(symbol, { period1: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000), interval: '1d' });
-            if (fallback?.quotes) {
-                formattedData = fallback.quotes
-                    .filter(q => q.close !== null)
-                    .map(q => {
-                        const d = new Date(q.date);
-                        return { time: d.toISOString().slice(5, 10).replace('-', '/'), fullDate: d.toISOString(), value: parseFloat(q.close.toFixed(2)) };
-                    });
-            }
+            console.error(`[CLOUD DEBUG] HTML Scraper failed for ${symbol}:`, fetchErr.message);
+            // We do not fallback to the library here because it is guaranteed to crash on Render
         }
 
         // Save to cache before returning
