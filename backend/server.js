@@ -45,7 +45,7 @@ app.use('/api/auth', authRoutes);
 app.use('/api/trade', tradeRoutes);
 app.use('/api/chat', chatRoutes);
 
-import YahooFinance from 'yahoo-finance2';
+import yahooFinance from 'yahoo-finance2';
 const FINNHUB_KEY = process.env.FINNHUB_API_KEY || '';
 
 // Convert Yahoo Finance symbol (RELIANCE.NS) → Finnhub symbol (NSE:RELIANCE)
@@ -347,22 +347,41 @@ app.get('/api/search', async (req, res) => {
         const q = req.query.q;
         if (!q || q.length < 1) return res.json([]);
 
-        const results = await yahooFinance.search(q, { newsCount: 0, quotesCount: 15 });
-        const allQuotes = results.quotes || [];
+        let mapped = [];
+        try {
+            const results = await yahooFinance.search(q, { newsCount: 0, quotesCount: 15 });
+            const allQuotes = results.quotes || [];
 
-        // Prefer NSE/BSE stocks, fall back to all equities
-        let quotes = allQuotes.filter(r => r.symbol?.endsWith('.NS') || r.symbol?.endsWith('.BO'));
-        if (quotes.length < 3) {
-            quotes = allQuotes.filter(r => r.typeDisp === 'Equity');
+            // Prefer NSE/BSE stocks
+            let quotes = allQuotes.filter(r => r.symbol?.endsWith('.NS') || r.symbol?.endsWith('.BO'));
+            if (quotes.length < 3) {
+                quotes = allQuotes.filter(r => r.typeDisp === 'Equity');
+            }
+
+            mapped = quotes.slice(0, 8).map(r => ({
+                sym: r.symbol?.replace('.NS', '').replace('.BO', ''),
+                rawSym: r.symbol,
+                name: r.longname || r.shortname || r.symbol,
+                exchange: r.exchDisp || 'NSE',
+                type: r.typeDisp || 'Equity',
+            }));
+        } catch (searchErr) {
+            console.warn('Yahoo Search blocked, using Top NSE fallback:', searchErr.message);
         }
 
-        const mapped = quotes.slice(0, 8).map(r => ({
-            sym: r.symbol?.replace('.NS', '').replace('.BO', ''),
-            rawSym: r.symbol,
-            name: r.longname || r.shortname || r.symbol,
-            exchange: r.exchDisp || 'NSE',
-            type: r.typeDisp || 'Equity',
-        }));
+        // If Yahoo fails or returns nothing, fallback to our internal TOP list
+        if (mapped.length === 0) {
+            const topMatches = TOP_NSE_STOCKS
+                .filter(s => s.toLowerCase().includes(q.toLowerCase()))
+                .map(s => ({
+                    sym: s.replace('.NS', ''),
+                    rawSym: s,
+                    name: s.replace('.NS', ''),
+                    exchange: 'NSE',
+                    type: 'Equity'
+                }));
+            mapped = topMatches;
+        }
 
         res.json(mapped);
     } catch (err) {
