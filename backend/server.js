@@ -51,12 +51,61 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 // Load full NSE stock list (2,200+ companies)
 let ALL_NSE_STOCKS = [];
+let GLOBAL_STOCK_CACHE = new Map(); // Store real-time data + timestamps
+
 try {
     ALL_NSE_STOCKS = JSON.parse(readFileSync(path.join(__dirname, 'nse-stocks.json'), 'utf-8'));
     console.log(`✅ Loaded ${ALL_NSE_STOCKS.length} NSE stocks for search.`);
+
+    // Initialize cache with basic names/symbols
+    ALL_NSE_STOCKS.forEach(s => {
+        GLOBAL_STOCK_CACHE.set(s.symbol, {
+            symbol: s.symbol,
+            name: s.name,
+            price: 0,
+            changePct: 0,
+            lastUpdated: null
+        });
+    });
 } catch (e) {
     console.warn('Could not load nse-stocks.json, falling back to top list:', e.message);
 }
+
+// Background Worker to keep all 2,264 stocks updated
+async function startBackgroundWorker() {
+    console.log('🚀 Starting Background Stock Worker (2,264 stocks)...');
+    let currentIndex = 0;
+    const BATCH_SIZE = 5; // Small batch to avoid rate limiting
+
+    setInterval(async () => {
+        const batch = ALL_NSE_STOCKS.slice(currentIndex, currentIndex + BATCH_SIZE);
+        currentIndex = (currentIndex + BATCH_SIZE) % ALL_NSE_STOCKS.length;
+
+        for (const stock of batch) {
+            try {
+                const symbol = `${stock.symbol}.NS`;
+                const data = await fetchGoogleFinanceQuote(symbol);
+                GLOBAL_STOCK_CACHE.set(stock.symbol, {
+                    ...stock,
+                    price: data.regularMarketPrice,
+                    changePct: data.regularMarketChangePercent,
+                    high: data.regularMarketDayHigh,
+                    low: data.regularMarketDayLow,
+                    marketCap: data.marketCap,
+                    pe: data.trailingPE,
+                    divYield: data.dividendYield,
+                    avgVolume: data.averageDailyVolume3Month,
+                    yearHigh: data.fiftyTwoWeekHigh,
+                    yearLow: data.fiftyTwoWeekLow,
+                    lastUpdated: new Date().toISOString()
+                });
+            } catch (err) {
+                // Silently fail for individual stocks in the bg loop
+            }
+        }
+    }, 5000); // Process a batch every 5 seconds
+}
+startBackgroundWorker();
 
 import yahooFinance from 'yahoo-finance2';
 const FINNHUB_KEY = process.env.FINNHUB_API_KEY || '';
@@ -510,14 +559,13 @@ app.get('/api/stock/:symbol', async (req, res) => {
         console.warn(`Yahoo Detail failed for ${req.params.symbol}, using Scraper fallback:`, err.message);
 
         try {
-            let symbol = req.params.symbol;
-            if (!symbol.includes('.')) symbol = symbol + '.NS';
+            const cached = GLOBAL_STOCK_CACHE.get(symbol.replace('.NS', ''));
             const scraped = await fetchGoogleFinanceQuote(symbol);
 
             res.json({
                 sym: symbol.replace('.NS', ''),
                 rawSym: symbol,
-                name: scraped.shortName,
+                name: scraped.shortName || cached?.name || symbol.replace('.NS', ''),
                 price: scraped.regularMarketPrice,
                 change: (scraped.regularMarketPrice * (scraped.regularMarketChangePercent / 100)),
                 changePct: scraped.regularMarketChangePercent,
@@ -540,6 +588,7 @@ app.get('/api/stock/:symbol', async (req, res) => {
                 employees: null,
                 exchange: 'NSE',
                 currency: 'INR',
+                lastUpdated: new Date().toISOString()
             });
         } catch (scrapErr) {
             console.error('Total fallback failure:', scrapErr.message);

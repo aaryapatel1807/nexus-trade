@@ -237,10 +237,15 @@ export function DashboardLayout({ children }) {
     }, [])
 
     const handleSelectStock = (stock) => {
-        setSelectedStock(stock)
-        setShowDropdown(false)
-        setSearchQuery(stock.name)
-    }
+        // Correctly extract the symbol - if it's already a symbol string use it, otherwise parse it
+        const symbol = stock.sym || stock.symbol || (typeof stock === 'string' ? stock : null);
+        if (symbol) {
+            setSelectedStock(stock); // Assuming the intent was to still set the selected stock for the modal
+            setShowDropdown(false);
+            setSearchQuery(''); // Clear search query
+            setSearchResults([]); // Clear search results
+        }
+    };
 
     // Live header indices
     const [hdr, setHdr] = useState({ nifty: null, sensex: null, vix: null })
