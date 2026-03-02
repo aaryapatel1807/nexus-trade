@@ -175,52 +175,49 @@ app.get('/api/stocks/history', async (req, res) => {
         const config = periodMap[period] || periodMap['1m'];
         const isIntraday = ['15m', '5m', '1m', '30m', '60m', '1h'].includes(config.interval);
 
-        // Scrape Yahoo Finance webpage directly (Bypasses API rate limits and 401 Unauthorized)
-        const url = `https://finance.yahoo.com/quote/${encodeURIComponent(symbol)}/history`;
-        const YF_HEADERS = {
-            'User-Agent': randomAgent,
-            'Accept': 'text/html,application/xhtml+xml,application/xml',
-            'Accept-Language': 'en-US,en;q=0.9',
-            'Cache-Control': 'max-age=0',
-        };
+        // Fetch historical data from Finnhub (since Yahoo entirely blocks us on Render)
+        // Finnhub free tier limits 60 req/min, but since we are caching the responses for 60s,
+        // and there is only 1 chart loaded at a time, we will safely stay under the limit.
+        const finnhubSym = symbol.endsWith('.NS') ? `NSE:${symbol.replace('.NS', '')}` : symbol;
+        const to = Math.floor(Date.now() / 1000);
+        let from = to - (24 * 60 * 60);
+        let resParams = '15'; // 15 mins
 
-        const controller = new AbortController();
-        const timeout = setTimeout(() => controller.abort(), 10000);
+        // Map period to Finnhub resolutions
+        if (period === '1d') { from = to - (2 * 24 * 60 * 60); resParams = '15'; }
+        else if (period === '1w') { from = to - (7 * 24 * 60 * 60); resParams = '60'; }
+        else if (period === '1m') { from = to - (30 * 24 * 60 * 60); resParams = 'D'; }
+        else if (period === '3m') { from = to - (90 * 24 * 60 * 60); resParams = 'D'; }
+        else if (period === '1y') { from = to - (365 * 24 * 60 * 60); resParams = 'W'; }
+        else { from = to - (5 * 365 * 24 * 60 * 60); resParams = 'M'; }
+
+        const url = `https://finnhub.io/api/v1/stock/candle?symbol=${finnhubSym}&resolution=${resParams}&from=${from}&to=${to}&token=${FINNHUB_KEY}`;
 
         let formattedData = [];
         try {
-            const r = await fetch(url, { headers: YF_HEADERS, signal: controller.signal });
-            clearTimeout(timeout);
+            if (!FINNHUB_KEY) throw new Error("Missing FINNHUB_KEY");
+            const r = await fetch(url);
+            if (!r.ok) throw new Error(`Finnhub HTTP ${r.status}`);
+            const json = await r.json();
 
-            if (!r.ok) throw new Error(`Yahoo HTML HTTP ${r.status}`);
-            const html = await r.text();
+            if (json.s === 'ok' && json.t && json.c) {
+                formattedData = json.t.map((timestamp, index) => {
+                    const d = new Date(timestamp * 1000);
+                    const label = ['15', '60'].includes(resParams)
+                        ? d.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: false })
+                        : d.toISOString().slice(5, 10).replace('-', '/');
 
-            // Extract the embedded historical data from the page's React state
-            const stateMatch = html.match(/root\.App\.main\s*=\s*(\{.*?\});\s*\(function/);
-            if (!stateMatch) throw new Error('Could not parse Yahoo Finance React state');
-
-            const rawState = JSON.parse(stateMatch[1]);
-            const historicalData = rawState?.context?.dispatcher?.stores?.HistoricalPriceStore?.prices;
-
-            if (historicalData && Array.isArray(historicalData)) {
-                // Yahoo history is usually daily. We will take the last N days based on 'period'
-                const daysNeeded = period === '1d' ? 5 : (period === '1w' ? 7 : (period === '1m' ? 30 : 90));
-
-                // Sort ascending (oldest first)
-                const sorted = historicalData
-                    .filter(p => !p.type && p.close !== null)
-                    .sort((a, b) => a.date - b.date)
-                    .slice(-daysNeeded);
-
-                formattedData = sorted.map(p => {
-                    const d = new Date(p.date * 1000);
-                    const label = d.toISOString().slice(5, 10).replace('-', '/');
-                    return { time: label, fullDate: d.toISOString(), value: parseFloat(p.close.toFixed(2)) };
+                    return {
+                        time: label,
+                        fullDate: d.toISOString(),
+                        value: parseFloat(json.c[index].toFixed(2))
+                    };
                 });
+            } else {
+                console.error(`Finnhub returned no_data for ${symbol}`);
             }
         } catch (fetchErr) {
-            console.error(`[CLOUD DEBUG] HTML Scraper failed for ${symbol}:`, fetchErr.message);
-            // We do not fallback to the library here because it is guaranteed to crash on Render
+            console.error(`[CLOUD DEBUG] Finnhub History failed for ${symbol}:`, fetchErr.message);
         }
 
         // Save to cache before returning
@@ -292,33 +289,33 @@ const TOP_NSE_STOCKS = [
 app.get('/api/scanner', async (req, res) => {
     try {
         const results = await Promise.allSettled(
-            TOP_NSE_STOCKS.map(sym => yahooFinance.quote(sym))
+            TOP_NSE_STOCKS.map(async (sym) => {
+                const now = Date.now();
+                if (cache.quotes[sym] && (now - cache.quotes[sym].timestamp < CACHE_TTL_MS)) {
+                    return cache.quotes[sym].data;
+                }
+
+                const quote = await fetchGoogleFinanceQuote(sym);
+                const newData = {
+                    sym: sym.replace('.NS', ''),
+                    name: quote.shortName || sym,
+                    price: quote.regularMarketPrice || 0,
+                    change: quote.regularMarketChangePercent || 0,
+                    volume: 0, cap: 'N/A', pe: null, high52w: 0, low52w: 0,
+                    signal: quote.regularMarketChangePercent > 2 ? 'Strong Buy'
+                        : quote.regularMarketChangePercent > 0.5 ? 'Buy'
+                            : quote.regularMarketChangePercent < -2 ? 'Strong Sell'
+                                : quote.regularMarketChangePercent < -0.5 ? 'Sell' : 'Neutral',
+                };
+                cache.quotes[sym] = { data: newData, timestamp: now };
+                return newData;
+            })
         );
 
         const stocks = results
-            .map((r, i) => {
+            .map((r) => {
                 if (r.status !== 'fulfilled' || !r.value) return null;
-                const q = r.value;
-                return {
-                    sym: q.symbol?.replace('.NS', '') || TOP_NSE_STOCKS[i].replace('.NS', ''),
-                    name: q.longName || q.shortName || q.symbol,
-                    price: q.regularMarketPrice || 0,
-                    change: q.regularMarketChangePercent || 0,
-                    volume: q.regularMarketVolume || 0,
-                    cap: q.marketCap
-                        ? q.marketCap >= 1e12
-                            ? `₹${(q.marketCap / 1e12).toFixed(2)}T`
-                            : `₹${(q.marketCap / 1e7).toFixed(0)}Cr`
-                        : 'N/A',
-                    pe: q.trailingPE ? parseFloat(q.trailingPE.toFixed(1)) : null,
-                    high52w: q.fiftyTwoWeekHigh || 0,
-                    low52w: q.fiftyTwoWeekLow || 0,
-                    signal: q.regularMarketChangePercent > 2 ? 'Strong Buy'
-                        : q.regularMarketChangePercent > 0.5 ? 'Buy'
-                            : q.regularMarketChangePercent < -2 ? 'Strong Sell'
-                                : q.regularMarketChangePercent < -0.5 ? 'Sell'
-                                    : 'Neutral',
-                };
+                return r.value;
             })
             .filter(Boolean);
 
