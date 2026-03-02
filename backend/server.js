@@ -72,29 +72,33 @@ async function fetchFinnhubQuote(sym) {
     };
 }
 
+// --- In-Memory Cache for Stock Data ---
+// Finnhub limit: 60/min. Yahoo: Blocks cloud IPs.
+// Solution: Cache prices for 60 seconds.
+const cache = {
+    quotes: {},   // { 'RELIANCE.NS': { data: {...}, timestamp: 12345 } }
+    history: {}   // { 'RELIANCE.NS-1m': { data: [...], timestamp: 12345 } }
+};
+const CACHE_TTL_MS = 60 * 1000; // 60 seconds
+
 app.get('/api/stocks', async (req, res) => {
     try {
         const symbolsStr = req.query.symbols || 'RELIANCE.NS,TCS.NS,HDFCBANK.NS,INFY.NS,SBIN.NS';
         const symbols = symbolsStr.split(',');
+        const now = Date.now();
 
         const results = await Promise.all(symbols.map(async (sym) => {
             const returnSym = sym.startsWith('^') ? sym : sym.replace('.NS', '').replace('.BO', '');
+
+            // 1. Check Cache first
+            if (cache.quotes[sym] && (now - cache.quotes[sym].timestamp < CACHE_TTL_MS)) {
+                return cache.quotes[sym].data;
+            }
+
             try {
-                // Try Finnhub first (works on cloud), fallback to Yahoo library
-                let quote;
-                try {
-                    quote = await fetchFinnhubQuote(sym);
-                } catch (fhErr) {
-                    console.error(`[CLOUD DEBUG] Finnhub failed for ${sym}:`, fhErr.message);
-                    try {
-                        const yf = typeof YahooFinance === 'function' ? new YahooFinance() : YahooFinance;
-                        quote = await yf.quote(sym, {}, { validateResult: false });
-                    } catch (yfErr) {
-                        console.error(`[CLOUD DEBUG] Yahoo fallback failed for ${sym}:`, yfErr.message);
-                        throw new Error('Both Finnhub and Yahoo failed');
-                    }
-                }
-                return {
+                // 2. Fetch fresh data from Finnhub
+                const quote = await fetchFinnhubQuote(sym);
+                const newData = {
                     sym: returnSym,
                     name: quote.shortName || quote.longName || returnSym,
                     price: quote.regularMarketPrice || 0,
@@ -103,8 +107,21 @@ app.get('/api/stocks', async (req, res) => {
                     pe: quote.forwardPE || quote.trailingPE || 'N/A',
                     cap: quote.marketCap ? (quote.marketCap / 1e9).toFixed(1) + 'B' : 'N/A'
                 };
-            } catch (err) {
-                console.error(`[CLOUD DEBUG] Final failure for ${sym}: returning 0s`);
+
+                // 3. Save to cache
+                cache.quotes[sym] = { data: newData, timestamp: now };
+                return newData;
+
+            } catch (fhErr) {
+                console.error(`[CLOUD DEBUG] Finnhub failed for ${sym}:`, fhErr.message);
+
+                // 4. Fallback to Stale Cache (better than 0)
+                if (cache.quotes[sym]) {
+                    console.log(`Returning stale cache for ${sym}`);
+                    return cache.quotes[sym].data;
+                }
+
+                // 5. Final fallback (will likely return 0s if Yahoo is blocked)
                 return { sym: returnSym, name: returnSym, price: 0, change: 0, value: 0, pe: 'N/A', cap: 'N/A' };
             }
         }));
@@ -121,22 +138,36 @@ app.get('/api/stocks/history', async (req, res) => {
     try {
         const symbol = req.query.symbol || 'RELIANCE.NS';
         const period = (req.query.period || '1m').toLowerCase();
+        const cacheKey = `${symbol}-${period}`;
+        const nowTime = Date.now();
+
+        // 1. Check Cache
+        if (cache.history[cacheKey] && (nowTime - cache.history[cacheKey].timestamp < CACHE_TTL_MS)) {
+            return res.json(cache.history[cacheKey].data);
+        }
 
         const periodMap = {
             '1d': { range: '1d', interval: '15m' },
-            '1w': { range: '5d', interval: '15m' }, // Yahoo API prefers '5d' for 1 week
+            '1w': { range: '5d', interval: '15m' }, // Yahoo prefers 5d
             '1m': { range: '1mo', interval: '1d' },
             '3m': { range: '3mo', interval: '1d' },
             '1y': { range: '1y', interval: '1wk' },
             'all': { range: 'max', interval: '1mo' },
         };
-
         const config = periodMap[period] || periodMap['1m'];
         const isIntraday = ['15m', '5m', '1m', '30m', '60m', '1h'].includes(config.interval);
 
+        // Randomize User-Agent to evade Yahoo blocking
+        const agents = [
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+            'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.3 Safari/605.1.15',
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:123.0) Gecko/20100101 Firefox/123.0'
+        ];
+        const randomAgent = agents[Math.floor(Math.random() * agents.length)];
+
         const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?range=${config.range}&interval=${config.interval}`;
         const YF_HEADERS = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+            'User-Agent': randomAgent,
             'Accept': 'application/json',
             'Origin': 'https://finance.yahoo.com',
             'Referer': 'https://finance.yahoo.com/',
@@ -186,6 +217,11 @@ app.get('/api/stocks/history', async (req, res) => {
                         return { time: d.toISOString().slice(5, 10).replace('-', '/'), fullDate: d.toISOString(), value: parseFloat(q.close.toFixed(2)) };
                     });
             }
+        }
+
+        // Save to cache before returning
+        if (formattedData.length > 0) {
+            cache.history[cacheKey] = { data: formattedData, timestamp: Date.now() };
         }
 
         res.json(formattedData);
