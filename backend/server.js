@@ -44,6 +44,19 @@ app.use(express.json());
 app.use('/api/auth', authRoutes);
 app.use('/api/trade', tradeRoutes);
 app.use('/api/chat', chatRoutes);
+import { readFileSync } from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+// Load full NSE stock list (2,200+ companies)
+let ALL_NSE_STOCKS = [];
+try {
+    ALL_NSE_STOCKS = JSON.parse(readFileSync(path.join(__dirname, 'nse-stocks.json'), 'utf-8'));
+    console.log(`✅ Loaded ${ALL_NSE_STOCKS.length} NSE stocks for search.`);
+} catch (e) {
+    console.warn('Could not load nse-stocks.json, falling back to top list:', e.message);
+}
 
 import yahooFinance from 'yahoo-finance2';
 const FINNHUB_KEY = process.env.FINNHUB_API_KEY || '';
@@ -349,41 +362,49 @@ app.get('/api/search', async (req, res) => {
 
         let mapped = [];
         try {
+            // 1. Try Yahoo Finance Search (Provides global context / details)
             const results = await yahooFinance.search(q, { newsCount: 0, quotesCount: 15 });
             const allQuotes = results.quotes || [];
 
-            // Prefer NSE/BSE stocks
-            let quotes = allQuotes.filter(r => r.symbol?.endsWith('.NS') || r.symbol?.endsWith('.BO'));
-            if (quotes.length < 3) {
-                quotes = allQuotes.filter(r => r.typeDisp === 'Equity');
-            }
-
-            mapped = quotes.slice(0, 8).map(r => ({
-                sym: r.symbol?.replace('.NS', '').replace('.BO', ''),
-                rawSym: r.symbol,
-                name: r.longname || r.shortname || r.symbol,
-                exchange: r.exchDisp || 'NSE',
-                type: r.typeDisp || 'Equity',
-            }));
-        } catch (searchErr) {
-            console.warn('Yahoo Search blocked, using Top NSE fallback:', searchErr.message);
-        }
-
-        // If Yahoo fails or returns nothing, fallback to our internal TOP list
-        if (mapped.length === 0) {
-            const topMatches = TOP_NSE_STOCKS
-                .filter(s => s.toLowerCase().includes(q.toLowerCase()))
-                .map(s => ({
-                    sym: s.replace('.NS', ''),
-                    rawSym: s,
-                    name: s.replace('.NS', ''),
-                    exchange: 'NSE',
-                    type: 'Equity'
+            mapped = allQuotes
+                .filter(r => (r.symbol?.endsWith('.NS') || r.symbol?.endsWith('.BO') || r.typeDisp === 'Equity'))
+                .slice(0, 10)
+                .map(r => ({
+                    sym: r.symbol?.replace('.NS', '').replace('.BO', ''),
+                    rawSym: r.symbol,
+                    name: r.longname || r.shortname || r.symbol,
+                    exchange: r.exchDisp || (r.symbol?.endsWith('.BO') ? 'BSE' : 'NSE'),
+                    type: 'Equity',
                 }));
-            mapped = topMatches;
+        } catch (searchErr) {
+            console.warn('Yahoo Search failed/blocked:', searchErr.message);
         }
 
-        res.json(mapped);
+        // 2. Supplement/Fallback with our local 2,200+ NSE stock database
+        const localMatches = ALL_NSE_STOCKS
+            .filter(s =>
+                s.symbol.toLowerCase().includes(q.toLowerCase()) ||
+                s.name.toLowerCase().includes(q.toLowerCase())
+            )
+            .slice(0, 10)
+            .map(s => ({
+                sym: s.symbol,
+                rawSym: `${s.symbol}.NS`,
+                name: s.name,
+                exchange: 'NSE',
+                type: 'Equity'
+            }));
+
+        // Merge results: Prioritize Yahoo if it worked, but ensure we have local NSE matches
+        // Use a Map to de-duplicate by symbol
+        const finalMap = new Map();
+        [...mapped, ...localMatches].forEach(item => {
+            if (!finalMap.has(item.sym)) {
+                finalMap.set(item.sym, item);
+            }
+        });
+
+        res.json(Array.from(finalMap.values()).slice(0, 12));
     } catch (err) {
         console.error('Search error:', err.message);
         res.json([]);
