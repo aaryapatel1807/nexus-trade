@@ -117,53 +117,70 @@ app.get('/api/stocks/history', async (req, res) => {
         const symbol = req.query.symbol || 'RELIANCE.NS';
         const period = (req.query.period || '1m').toLowerCase();
 
-        const now = new Date();
-
         const periodMap = {
-            '1d': { period1: new Date(now - 1 * 24 * 60 * 60 * 1000), interval: '15m' },
-            '1w': { period1: new Date(now - 7 * 24 * 60 * 60 * 1000), interval: '1d' },
-            '1m': { period1: new Date(now - 30 * 24 * 60 * 60 * 1000), interval: '1d' },
-            '3m': { period1: new Date(now - 90 * 24 * 60 * 60 * 1000), interval: '1d' },
-            '1y': { period1: new Date(now - 365 * 24 * 60 * 60 * 1000), interval: '1wk' },
-            'all': { period1: new Date('2010-01-01'), interval: '1mo' },
+            '1d': { range: '1d', interval: '15m' },
+            '1w': { range: '5d', interval: '15m' }, // Yahoo API prefers '5d' for 1 week
+            '1m': { range: '1mo', interval: '1d' },
+            '3m': { range: '3mo', interval: '1d' },
+            '1y': { range: '1y', interval: '1wk' },
+            'all': { range: 'max', interval: '1mo' },
         };
 
         const config = periodMap[period] || periodMap['1m'];
+        const isIntraday = ['15m', '5m', '1m', '30m', '60m', '1h'].includes(config.interval);
 
-        const formatPoints = (quotes, isIntraday) =>
-            quotes
-                .filter(q => q.close !== null && q.close !== undefined)
-                .map(point => {
-                    const d = new Date(point.date);
-                    const label = isIntraday
-                        ? d.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: false })
-                        : d.toISOString().slice(5, 10).replace('-', '/');
-                    return { time: label, fullDate: d.toISOString(), value: parseFloat(point.close.toFixed(2)) };
-                });
+        const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?range=${config.range}&interval=${config.interval}`;
+        const YF_HEADERS = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+            'Accept': 'application/json',
+            'Origin': 'https://finance.yahoo.com',
+            'Referer': 'https://finance.yahoo.com/',
+        };
 
-        const withTimeout = (promise, ms) =>
-            Promise.race([promise, new Promise((_, rej) => setTimeout(() => rej(new Error('Timeout')), ms))]);
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 10000);
 
-        let chartResults = await withTimeout(yahooFinance.chart(symbol, {
-            period1: config.period1,
-            period2: now,
-            interval: config.interval,
-        }), 10000);
+        let formattedData = [];
+        try {
+            const r = await fetch(url, { headers: YF_HEADERS, signal: controller.signal });
+            clearTimeout(timeout);
 
-        let formattedData = chartResults?.quotes?.length > 0
-            ? formatPoints(chartResults.quotes, period === '1d')
-            : [];
+            if (!r.ok) throw new Error(`Yahoo HTTP ${r.status}`);
+            const json = await r.json();
 
-        // 1D fallback: if market is closed, show last 5 days of 30m data
-        if (period === '1d' && formattedData.length === 0) {
-            const fallback = await yahooFinance.chart(symbol, {
-                period1: new Date(now - 5 * 24 * 60 * 60 * 1000),
-                period2: now,
-                interval: '30m',
-            });
-            formattedData = fallback?.quotes?.length > 0
-                ? formatPoints(fallback.quotes, true)
-                : [];
+            const result = json?.chart?.result?.[0];
+            if (result && result.timestamp && result.indicators?.quote?.[0]?.close) {
+                const timestamps = result.timestamp;
+                const closes = result.indicators.quote[0].close;
+
+                for (let i = 0; i < timestamps.length; i++) {
+                    if (closes[i] !== null && closes[i] !== undefined) {
+                        const d = new Date(timestamps[i] * 1000);
+                        const label = isIntraday
+                            ? d.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: false })
+                            : d.toISOString().slice(5, 10).replace('-', '/');
+
+                        formattedData.push({
+                            time: label,
+                            fullDate: d.toISOString(),
+                            value: parseFloat(closes[i].toFixed(2))
+                        });
+                    }
+                }
+            }
+        } catch (fetchErr) {
+            console.error(`Direct fetch failed for ${symbol}:`, fetchErr.message);
+            // Fallback to library just in case
+            const yf = typeof YahooFinance === 'function' ? new YahooFinance() : YahooFinance;
+            const fallback = await yf.chart(symbol, { period1: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000), interval: '1d' });
+            if (fallback?.quotes) {
+                formattedData = fallback.quotes
+                    .filter(q => q.close !== null)
+                    .map(q => {
+                        const d = new Date(q.date);
+                        return { time: d.toISOString().slice(5, 10).replace('-', '/'), fullDate: d.toISOString(), value: parseFloat(q.close.toFixed(2)) };
+                    });
+            }
         }
 
         res.json(formattedData);
