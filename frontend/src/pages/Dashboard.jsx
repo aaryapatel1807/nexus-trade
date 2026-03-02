@@ -175,7 +175,7 @@ export function Dashboard() {
                         </div>
 
                         {/* Interactive Chart */}
-                        <div className="h-[300px] w-full mt-6 pl-[-20px] relative">
+                        <div className="h-[300px] min-h-[300px] w-full mt-6 -ml-[20px] relative">
                             {isChartLoading && (
                                 <div className="absolute inset-0 z-10 flex items-center justify-center bg-black/20 backdrop-blur-sm rounded-xl">
                                     <span className="text-primary font-mono animate-pulse">LOADING CHART DATA...</span>
