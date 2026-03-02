@@ -25,7 +25,16 @@ export function Screener() {
             const res = await apiFetch('/api/scanner')
             const data = await res.json()
             if (Array.isArray(data)) {
-                setResults(data)
+                // Pre-calculate signals since the raw Google scraper only provides percentage change
+                const enrichedData = data.map(stock => {
+                    let s = 'Neutral';
+                    if (stock.change > 2.5) s = 'Strong Buy';
+                    else if (stock.change > 0.5) s = 'Buy';
+                    else if (stock.change < -2.5) s = 'Strong Sell';
+                    else if (stock.change < -0.5) s = 'Sell';
+                    return { ...stock, signal: s };
+                });
+                setResults(enrichedData)
                 setLastUpdated(new Date())
             }
         } catch (err) {

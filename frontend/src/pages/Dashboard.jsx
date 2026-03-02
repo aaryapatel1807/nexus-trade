@@ -264,11 +264,14 @@ export function Dashboard() {
                                                 </div>
                                                 <div className="flex items-center justify-between mt-0.5">
                                                     <span className="text-xs text-text-muted truncate max-w-[90px]">{stock.name?.split(' ')[0]}</span>
-                                                    <span className={`text-xs px-1.5 py-0.5 rounded font-mono ${stock.signal?.includes('Strong Buy') ? 'bg-success/20 text-success' :
-                                                        stock.signal?.includes('Buy') ? 'bg-success/10 text-success' :
-                                                            stock.signal?.includes('Sell') ? 'bg-danger/10 text-danger' :
-                                                                'bg-white/10 text-text-muted'
-                                                        }`}>{stock.signal}</span>
+                                                    {(() => {
+                                                        let s = 'Neutral'; let bg = 'bg-white/10 text-text-muted';
+                                                        if (stock.change > 2.5) { s = 'Strong Buy'; bg = 'bg-success/20 text-success border border-success/30'; }
+                                                        else if (stock.change > 0.5) { s = 'Buy'; bg = 'bg-success/10 text-success'; }
+                                                        else if (stock.change < -2.5) { s = 'Strong Sell'; bg = 'bg-danger/20 text-danger border border-danger/30'; }
+                                                        else if (stock.change < -0.5) { s = 'Sell'; bg = 'bg-danger/10 text-danger'; }
+                                                        return <span className={`text-xs px-2 py-0.5 rounded font-mono ${bg}`}>{s}</span>
+                                                    })()}
                                                 </div>
                                             </div>
                                         </div>
