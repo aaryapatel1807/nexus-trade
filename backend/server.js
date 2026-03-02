@@ -140,7 +140,7 @@ app.get('/api/stocks', async (req, res) => {
                     return cache.quotes[sym].data;
                 }
 
-                return { sym: returnSym, name: returnSym, price: 0, change: 0, value: 0, pe: 'N/A', cap: 'N/A' };
+                return { sym: returnSym, name: returnSym, price: 0, change: 0, value: 0, pe: 'N/A', cap: 'N/A', debug: err.message };
             }
         }));
 
@@ -231,7 +231,7 @@ app.get('/api/stocks/history', async (req, res) => {
         res.json(formattedData);
     } catch (error) {
         console.error('Error fetching historical data:', error.message);
-        res.status(500).json({ error: 'Failed to fetch historical data' });
+        res.status(500).json({ error: 'Failed to fetch historical data', debug: error.message, stack: error.stack });
     }
 });
 
