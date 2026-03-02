@@ -3,6 +3,7 @@ import { DashboardLayout, CompanyLogo } from '../components/layout/DashboardLayo
 import { TrendingUp, TrendingDown, PieChart, Activity, ShieldAlert, ArrowRight, Wallet, X, Clock } from 'lucide-react'
 import { useAuth } from '../context/AuthContext'
 import axios from 'axios'
+import { apiFetch } from '../lib/api'
 
 const GlassCard = ({ children, className = "" }) => (
     <div className={`bg-surface/60 backdrop-blur-lg border border-white/5 rounded-2xl p-6 ${className}`}>
@@ -93,11 +94,11 @@ export function Portfolio() {
                 }
 
                 const symbols = dbHoldings.map(h => `${h.symbol}.NS`).join(',');
-                const liveRes = await axios.get(`/api/stocks?symbols=${symbols}`);
-                const liveData = liveRes.data;
+                const liveRes = await apiFetch(`/api/stocks?symbols=${symbols}`);
+                const liveData = await liveRes.json();
 
                 const merged = dbHoldings.map(h => {
-                    const live = liveData.find(d => d.sym === `${h.symbol}.NS`);
+                    const live = liveData.find(d => d.sym === h.symbol || d.sym === `${h.symbol}.NS` || (d.sym && d.sym.replace('.NS', '') === h.symbol));
                     const currentPrice = live ? live.price : h.averagePrice;
                     const value = h.quantity * currentPrice;
                     const change = h.averagePrice > 0 ? ((currentPrice - h.averagePrice) / h.averagePrice) * 100 : 0;
