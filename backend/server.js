@@ -75,7 +75,7 @@ try {
 async function startBackgroundWorker() {
     console.log('🚀 Starting Background Stock Worker (2,264 stocks)...');
     let currentIndex = 0;
-    const BATCH_SIZE = 5; // Small batch to avoid rate limiting
+    const BATCH_SIZE = 10; // Increased batch size for faster coverage
 
     setInterval(async () => {
         const batch = ALL_NSE_STOCKS.slice(currentIndex, currentIndex + BATCH_SIZE);
@@ -83,6 +83,7 @@ async function startBackgroundWorker() {
 
         for (const stock of batch) {
             try {
+                // Try NSE first, fallback to no exchange suffix if needed
                 const symbol = `${stock.symbol}.NS`;
                 const data = await fetchGoogleFinanceQuote(symbol);
                 GLOBAL_STOCK_CACHE.set(stock.symbol, {
@@ -103,7 +104,7 @@ async function startBackgroundWorker() {
                 // Silently fail for individual stocks in the bg loop
             }
         }
-    }, 5000); // Process a batch every 5 seconds
+    }, 5000); // Process a batch every 5 seconds (~20 mins for full cycle)
 }
 startBackgroundWorker();
 
@@ -488,19 +489,19 @@ app.get('/api/search', async (req, res) => {
 
 // SINGLE STOCK FULL DETAILS
 app.get('/api/stock/:symbol', async (req, res) => {
-    try {
-        let symbol = req.params.symbol;
-        if (!symbol.includes('.')) symbol = symbol + '.NS';
+    let symbol = req.params.symbol;
+    if (!symbol.includes('.')) symbol = symbol + '.NS';
 
-        // 1. Fetch metadata and historical profile from Yahoo Finance
-        const [quote, summaryDetail] = await Promise.allSettled([
-            yahooFinance.quote(symbol),
-            yahooFinance.quoteSummary(symbol, { modules: ['assetProfile', 'summaryDetail', 'defaultKeyStatistics'] })
+    try {
+        const [quote, summaryDetail, assetProfile] = await Promise.all([
+            yahooFinance.quote(symbol).catch(e => { console.warn('Yahoo Quote failed:', e.message); return { status: 'rejected', reason: e }; }),
+            yahooFinance.quoteSummary(symbol, { modules: ["summaryDetail", "defaultKeyStatistics"] }).catch(e => ({ status: 'rejected', reason: e })),
+            yahooFinance.quoteSummary(symbol, { modules: ["assetProfile"] }).catch(e => ({ status: 'rejected', reason: e }))
         ]);
 
-        const q = quote.status === 'fulfilled' ? quote.value : {};
-        const s = summaryDetail.status === 'fulfilled' ? summaryDetail.value : {};
-        const profile = s.assetProfile || {};
+        const q = quote.status !== 'rejected' ? quote : {};
+        const s = summaryDetail.status !== 'rejected' ? summaryDetail : {};
+        const profile = assetProfile.status !== 'rejected' ? assetProfile.assetProfile || {} : {};
         const stats = s.defaultKeyStatistics || {};
         const summary = s.summaryDetail || {};
 
@@ -509,7 +510,6 @@ app.get('/api/stock/:symbol', async (req, res) => {
         if (process.env.FINNHUB_API_KEY) {
             try {
                 finnhubQuote = await new Promise((resolve, reject) => {
-                    // Finnhub uses slightly different tickers for international (e.g., RELIANCE.NS)
                     finnhubClient.quote(symbol, (error, data, response) => {
                         if (error) reject(error);
                         else resolve(data);
@@ -520,13 +520,15 @@ app.get('/api/stock/:symbol', async (req, res) => {
             }
         }
 
-        // 3. Merge data (Prioritize Finnhub for price/change, fallback to Yahoo)
         const currentPrice = finnhubQuote && finnhubQuote.c ? finnhubQuote.c : (q.regularMarketPrice || 0);
         const priceChange = finnhubQuote && finnhubQuote.d ? finnhubQuote.d : (q.regularMarketChange || 0);
         const priceChangePct = finnhubQuote && finnhubQuote.dp ? finnhubQuote.dp : (q.regularMarketChangePercent || 0);
         const dayHigh = finnhubQuote && finnhubQuote.h ? finnhubQuote.h : (q.regularMarketDayHigh || 0);
         const dayLow = finnhubQuote && finnhubQuote.l ? finnhubQuote.l : (q.regularMarketDayLow || 0);
         const dayOpen = finnhubQuote && finnhubQuote.o ? finnhubQuote.o : (q.regularMarketOpen || 0);
+
+        // If we have no price, throw to trigger the scraper fallback
+        if (!currentPrice || currentPrice === 0) throw new Error('No price returned from Yahoo/Finnhub');
 
         res.json({
             sym: q.symbol?.replace('.NS', '').replace('.BO', '') || symbol.replace('.NS', ''),
@@ -556,7 +558,7 @@ app.get('/api/stock/:symbol', async (req, res) => {
             currency: q.currency || 'INR',
         });
     } catch (err) {
-        console.warn(`Yahoo Detail failed for ${req.params.symbol}, using Scraper fallback:`, err.message);
+        console.warn(`Yahoo Detail failed for ${symbol}, using Scraper fallback:`, err.message);
 
         try {
             const cached = GLOBAL_STOCK_CACHE.get(symbol.replace('.NS', ''));
