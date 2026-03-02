@@ -90,25 +90,48 @@ async function fetchGoogleFinanceQuote(sym) {
 
     const price = parseFloat(priceMatch[1].replace(/,/g, ''));
 
-    // Extract percentage change safely without relying on unstable CSS classes
+    // Extract percentage change safely
     let changePercent = 0;
-    // Look for a > followed by an optional +/- then digits and a % sign then <
     const rx = />([+-]?[0-9,.]+)%</g;
     let m;
     let foundChanges = [];
     while ((m = rx.exec(html)) !== null) {
         foundChanges.push(parseFloat(m[1]));
     }
-    // Google Finance HTML usually has the main day's change as the first valid match
-    if (foundChanges.length > 0) {
-        changePercent = foundChanges[0];
+    if (foundChanges.length > 0) changePercent = foundChanges[0];
+
+    // --- ENHANCED STATS SCRAPER ---
+    const stats = {};
+    // Match <div class="mfs7be">Label</div><div class="P6uYm">Value</div>
+    const statsRx = /class="mfs7be">([^<]+)<\/div><div class="P6uYm">([^<]+)<\/div>/g;
+    let sm;
+    while ((sm = statsRx.exec(html)) !== null) {
+        stats[sm[1].trim().toUpperCase()] = sm[2].trim();
     }
+
+    const parseRange = (str) => {
+        if (!str) return [0, 0];
+        const parts = str.split(' - ').map(p => parseFloat(p.replace(/[^0-9.]/g, '')) || 0);
+        return parts.length === 2 ? parts : [parts[0], parts[0]];
+    };
+
+    const dayRange = parseRange(stats['DAY RANGE']);
+    const yearRange = parseRange(stats['YEAR RANGE']);
 
     return {
         regularMarketPrice: price,
         regularMarketChangePercent: changePercent,
         shortName: cleanSym,
-        marketCap: 0, forwardPE: null, trailingPE: null,
+        marketCap: stats['MARKET CAP'] || 0,
+        trailingPE: parseFloat(stats['P/E RATIO']) || null,
+        dividendYield: stats['DIVIDEND YIELD'] || null,
+        regularMarketDayLow: dayRange[0],
+        regularMarketDayHigh: dayRange[1],
+        fiftyTwoWeekLow: yearRange[0],
+        fiftyTwoWeekHigh: yearRange[1],
+        averageDailyVolume3Month: stats['AVG VOLUME'] || 0,
+        regularMarketVolume: 0, // Google Finance doesn't show real-time vol easily
+        longBusinessSummary: '', // Scraper doesn't get description easily
     };
 }
 
@@ -481,8 +504,44 @@ app.get('/api/stock/:symbol', async (req, res) => {
             currency: q.currency || 'INR',
         });
     } catch (err) {
-        console.error('Stock detail error:', err.message);
-        res.status(500).json({ error: 'Failed to fetch stock details' });
+        console.warn(`Yahoo Detail failed for ${req.params.symbol}, using Scraper fallback:`, err.message);
+
+        try {
+            let symbol = req.params.symbol;
+            if (!symbol.includes('.')) symbol = symbol + '.NS';
+            const scraped = await fetchGoogleFinanceQuote(symbol);
+
+            res.json({
+                sym: symbol.replace('.NS', ''),
+                rawSym: symbol,
+                name: scraped.shortName,
+                price: scraped.regularMarketPrice,
+                change: (scraped.regularMarketPrice * (scraped.regularMarketChangePercent / 100)),
+                changePct: scraped.regularMarketChangePercent,
+                open: 0,
+                high: scraped.regularMarketDayHigh,
+                low: scraped.regularMarketDayLow,
+                volume: 0,
+                avgVolume: scraped.averageDailyVolume3Month,
+                marketCap: scraped.marketCap,
+                high52w: scraped.fiftyTwoWeekHigh,
+                low52w: scraped.fiftyTwoWeekLow,
+                pe: scraped.trailingPE,
+                eps: null,
+                dividendYield: scraped.dividendYield,
+                beta: null,
+                sector: '',
+                industry: '',
+                description: '',
+                website: '',
+                employees: null,
+                exchange: 'NSE',
+                currency: 'INR',
+            });
+        } catch (scrapErr) {
+            console.error('Total fallback failure:', scrapErr.message);
+            res.status(500).json({ error: 'Failed to fetch stock details' });
+        }
     }
 });
 
