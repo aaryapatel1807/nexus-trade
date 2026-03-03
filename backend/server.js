@@ -78,7 +78,13 @@ try {
 
     ALL_NSE_STOCKS.forEach(s => {
         if (!GLOBAL_STOCK_CACHE.has(s.symbol)) {
-            GLOBAL_STOCK_CACHE.set(s.symbol, { symbol: s.symbol, name: s.name, price: 0, changePct: 0, lastUpdated: null });
+            GLOBAL_STOCK_CACHE.set(s.symbol, { 
+                symbol: s.symbol, 
+                name: s.name, 
+                price: null,  // ← Use null, not 0 - easier to detect uninitialized
+                changePct: 0, 
+                lastUpdated: null 
+            });
         }
     });
 } catch (e) {
@@ -355,10 +361,18 @@ async function updateTopStocks() {
         if (quote) {
             const clean = sym.replace('.NS', '');
             const existing = GLOBAL_STOCK_CACHE.get(clean) || {};
+            // Ensure price is always a number, never a string
+            const price = parseFloat(quote.regularMarketPrice);
+            if (!Number.isFinite(price) || price < 0) {
+                console.warn(`[UPDATE] Invalid price for ${sym}: ${quote.regularMarketPrice}`);
+                return;
+            }
             GLOBAL_STOCK_CACHE.set(clean, {
                 ...existing,
-                price: quote.regularMarketPrice,
-                changePct: quote.regularMarketChangePercent,
+                symbol: clean,  // ← Ensure symbol field exists
+                name: existing.name || quote.shortName || clean,
+                price: price,  // ← Store as float, not string
+                changePct: parseFloat(quote.regularMarketChangePercent) || 0,
                 lastUpdated: new Date().toISOString()
             });
         }

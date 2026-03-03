@@ -77,15 +77,15 @@ export function Dashboard() {
     useEffect(() => {
         const fetchWatchlist = async () => {
             try {
-                const res = await apiFetch('/api/stocks?symbols=RELIANCE.NS,TCS.NS,HDFCBANK.NS,INFY.NS,SBIN.NS')
+                const res = await apiFetch('/api/stocks/top')
                 const data = await res.json()
                 if (data && data.length > 0) {
-                    setWatchlist(data.map(d => ({
-                        sym: d.sym.replace('.NS', ''),
+                    setWatchlist(data.slice(0, 5).map(d => ({
+                        sym: d.symbol,
                         name: d.name,
                         price: (d.price || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }),
-                        change: `${d.change >= 0 ? '+' : ''}${(d.change || 0).toFixed(2)}%`,
-                        up: d.change >= 0
+                        change: `${(d.changePct || 0) >= 0 ? '+' : ''}${(d.changePct || 0).toFixed(2)}%`,
+                        up: (d.changePct || 0) >= 0
                     })))
                 }
             } catch (err) {

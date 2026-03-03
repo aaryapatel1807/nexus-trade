@@ -93,32 +93,50 @@ export function Portfolio() {
                     return;
                 }
 
-                const symbols = dbHoldings.map(h => `${h.symbol}.NS`).join(',');
-                const liveRes = await apiFetch(`/api/stocks?symbols=${symbols}`);
-                const liveData = await liveRes.json();
+                // Fetch live prices individually for each holding
+                const merged = await Promise.all(dbHoldings.map(async (h) => {
+                    try {
+                        const liveRes = await apiFetch(`/api/stock/${h.symbol}`);
+                        if (!liveRes.ok) throw new Error('Failed to fetch');
+                        const live = await liveRes.json();
+                        // Use regularMarketPrice from the API response (NOT cached value)
+                        const currentPrice = live?.regularMarketPrice || h.averagePrice;
+                        if (!Number.isFinite(currentPrice) || currentPrice <= 0) {
+                            throw new Error('Invalid price');
+                        }
+                        const value = h.quantity * currentPrice;
+                        const change = h.averagePrice > 0 ? ((currentPrice - h.averagePrice) / h.averagePrice) * 100 : 0;
+                        const todayChangePct = live?.regularMarketChangePercent || 0;
+                        const prevClose = currentPrice / (1 + todayChangePct / 100);
+                        const todayPnL = h.quantity * (currentPrice - prevClose);
 
-                const merged = dbHoldings.map(h => {
-                    const live = liveData.find(d => d.sym === h.symbol || d.sym === `${h.symbol}.NS` || (d.sym && d.sym.replace('.NS', '') === h.symbol));
-                    const currentPrice = live ? live.price : h.averagePrice;
-                    const value = h.quantity * currentPrice;
-                    const change = h.averagePrice > 0 ? ((currentPrice - h.averagePrice) / h.averagePrice) * 100 : 0;
-                    // Today's intraday change from Yahoo (regularMarketChangePercent)
-                    const todayChangePct = live ? (live.change || 0) : 0;
-                    const prevClose = currentPrice / (1 + todayChangePct / 100);
-                    const todayPnL = h.quantity * (currentPrice - prevClose);
-
-                    return {
-                        sym: h.symbol,
-                        name: live ? live.name : h.symbol,
-                        shares: h.quantity,
-                        avgPrice: h.averagePrice,
-                        currentPrice,
-                        value,
-                        change,
-                        todayChangePct,
-                        todayPnL,
-                    };
-                });
+                        return {
+                            sym: h.symbol,
+                            name: live?.shortName || h.symbol,
+                            shares: h.quantity,
+                            avgPrice: h.averagePrice,
+                            currentPrice,
+                            value,
+                            change,
+                            todayChangePct,
+                            todayPnL,
+                        };
+                    } catch (err) {
+                        console.error(`Failed to fetch live price for ${h.symbol}:`, err);
+                        // Fallback to average price when live fetch fails
+                        return {
+                            sym: h.symbol,
+                            name: h.symbol,
+                            shares: h.quantity,
+                            avgPrice: h.averagePrice,
+                            currentPrice: h.averagePrice,
+                            value: h.quantity * h.averagePrice,
+                            change: 0,
+                            todayChangePct: 0,
+                            todayPnL: 0,
+                        };
+                    }
+                }));
 
                 setHoldings(merged);
             } catch (err) {

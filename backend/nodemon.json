@@ -1,0 +1,14 @@
+{
+    "ignore": [
+        "*.test.js",
+        "test_*.js",
+        "debug_*.js",
+        "verify_*.js",
+        "inspect_*.js",
+        "prisma/dev.db*",
+        "*.sqlite*",
+        "stock-cache.json",
+        "*.log"
+    ],
+    "delay": "2500"
+}
