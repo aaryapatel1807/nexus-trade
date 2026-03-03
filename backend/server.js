@@ -1,11 +1,16 @@
 import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
-
+import { readFileSync, writeFileSync, existsSync } from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
 import authRoutes from './routes/auth.js';
 import tradeRoutes from './routes/trade.js';
 import chatRoutes from './routes/chat.js';
+import YahooFinance from 'yahoo-finance2';
 
+const PORT = process.env.PORT || 5000;
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
 
 app.use(cors({
@@ -49,13 +54,6 @@ app.use(express.json());
 app.use('/api/auth', authRoutes);
 app.use('/api/trade', tradeRoutes);
 app.use('/api/chat', chatRoutes);
-
-const PORT = process.env.PORT || 5000;
-
-import { readFileSync, writeFileSync, existsSync } from 'fs';
-import path from 'path';
-import { fileURLToPath } from 'url';
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 /**
  * =============================================================
@@ -315,7 +313,6 @@ async function fetchStockQuote(sym) {
 // ─────────────────────────────────────────────────────────────
 //  CHART HISTORY (Yahoo Finance chart API — only used for history)
 // ─────────────────────────────────────────────────────────────
-import YahooFinance from 'yahoo-finance2';
 const yf_history = new YahooFinance();
 const HISTORY_CACHE = new Map();
 const HISTORY_TTL = 10 * 60 * 1000;
