@@ -154,49 +154,51 @@ async function fetchGoogleFinanceQuote(sym) {
 }
 
 // --- HYBRID BACKGROUND WORKER ---
-// 1. High Priority (Top 40) - Refresh every 20 seconds
-// 2. Standard (Others) - Cycle refresh
-async function startBackgroundWorker() {
-    console.log('🚀 Starting Priority Stock Worker...');
+let NEWS_CACHE = { data: [], timestamp: 0 };
+const NEWS_TTL = 15 * 60 * 1000; // 15 mins
 
-    // Fast Loop: Top Stocks
-    setInterval(async () => {
-        for (const sym of TOP_NSE_STOCKS) {
+async function startBackgroundWorker() {
+    console.log('🚀 Starting Parallel Stock Worker...');
+
+    const refreshBatch = async (symbols) => {
+        return Promise.all(symbols.map(async (sym) => {
             const data = await fetchGoogleFinanceQuote(sym);
             if (data) {
-                const baseSym = sym.replace('.NS', '');
+                const baseSym = sym.replace('.NS', '').replace('.BO', '');
                 GLOBAL_STOCK_CACHE.set(baseSym, {
                     ...GLOBAL_STOCK_CACHE.get(baseSym),
                     price: data.regularMarketPrice,
                     changePct: data.regularMarketChangePercent,
-                    lastUpdated: new Date().toISOString()
+                    lastUpdated: new Date().toISOString(),
+                    marketCap: data.marketCap,
+                    pe: data.trailingPE,
+                    high: data.dayHigh,
+                    low: data.dayLow,
+                    name: data.shortName
                 });
             }
-            // Small delay between scrapes to avoid rate limit
-            await new Promise(r => setTimeout(r, 200));
+        }));
+    };
+
+    // Fast Loop: Top Stocks (Parallel batches of 5)
+    setInterval(async () => {
+        for (let i = 0; i < TOP_NSE_STOCKS.length; i += 5) {
+            const batch = TOP_NSE_STOCKS.slice(i, i + 5);
+            await refreshBatch(batch);
+            await new Promise(r => setTimeout(r, 100)); // Small gap
         }
     }, 20000);
 
-    // Standard Loop: Full List (2k+ stocks)
+    // Standard Loop: Full List
     let standardIdx = 0;
     setInterval(async () => {
-        const batch = ALL_NSE_STOCKS.slice(standardIdx, standardIdx + 5);
+        const batch = ALL_NSE_STOCKS.slice(standardIdx, standardIdx + 5).map(s => s.symbol + '.NS');
         standardIdx = (standardIdx + 5) % ALL_NSE_STOCKS.length;
+        await refreshBatch(batch);
+    }, 15000);
 
-        for (const stock of batch) {
-            if (TOP_NSE_STOCKS.includes(stock.symbol + '.NS')) continue;
-            const data = await fetchGoogleFinanceQuote(stock.symbol + '.NS');
-            if (data) {
-                GLOBAL_STOCK_CACHE.set(stock.symbol, {
-                    ...stock,
-                    price: data.regularMarketPrice,
-                    changePct: data.regularMarketChangePercent,
-                    lastUpdated: new Date().toISOString()
-                });
-            }
-            await new Promise(r => setTimeout(r, 500));
-        }
-    }, 10000);
+    // Initial Priming for Dashboard
+    refreshBatch(TOP_NSE_STOCKS.slice(0, 15));
 }
 startBackgroundWorker();
 
@@ -245,18 +247,24 @@ app.get('/api/stocks/history', async (req, res) => {
     try {
         const symbol = req.query.symbol || 'RELIANCE.NS';
         const period = (req.query.period || '1m').toLowerCase();
+        const clean = symbol.replace('.NS', '').replace('.BO', '');
+
+        // Cache for simulated history
+        const cache = { history: {} };
         const cacheKey = `${symbol}-${period}`;
 
-        if (cache.history[cacheKey] && (Date.now() - cache.history[cacheKey].timestamp < CACHE_TTL_MS)) {
-            return res.json(cache.history[cacheKey].data);
-        }
-
-        // Anchoring to real price for synthesis
+        // Anchoring to cached price if available (INSTANT)
         let anchorPrice = 1000;
-        try {
-            const fresh = await fetchGoogleFinanceQuote(symbol);
-            anchorPrice = fresh.regularMarketPrice;
-        } catch (e) { }
+        const cached = GLOBAL_STOCK_CACHE.get(clean);
+        if (cached && cached.price > 0) {
+            anchorPrice = cached.price;
+        } else {
+            // Only scrape if not in cache (Rare)
+            try {
+                const fresh = await fetchGoogleFinanceQuote(symbol);
+                if (fresh) anchorPrice = fresh.regularMarketPrice;
+            } catch (e) { }
+        }
 
         const dataPoints = period === '1d' ? 50 : 30;
         let formattedData = [];
@@ -266,7 +274,6 @@ app.get('/api/stocks/history', async (req, res) => {
             simPrice = simPrice / (1 + (Math.random() - 0.48) * 0.005);
         }
         formattedData.reverse();
-        cache.history[cacheKey] = { data: formattedData, timestamp: Date.now() };
         res.json(formattedData);
     } catch (e) {
         res.status(500).json({ error: 'Failed' });
@@ -278,18 +285,25 @@ const rssParser = new RSSParser();
 
 app.get('/api/news', async (req, res) => {
     try {
+        const now = Date.now();
+        if (NEWS_CACHE.data.length > 0 && (now - NEWS_CACHE.timestamp < NEWS_TTL)) {
+            return res.json(NEWS_CACHE.data);
+        }
+
         const feeds = ['https://economictimes.indiatimes.com/markets/rssfeeds/1977021501.cms'];
         const feed = await rssParser.parseURL(feeds[0]);
-        const articles = feed.items.slice(0, 10).map(item => ({
+        const articles = feed.items.slice(0, 12).map(item => ({
             title: item.title,
             source: 'Economic Times',
             link: item.link,
             publishedAt: item.pubDate,
             summary: item.contentSnippet || ''
         }));
+
+        NEWS_CACHE = { data: articles, timestamp: now };
         res.json(articles);
     } catch (e) {
-        res.status(500).json([]);
+        res.json(NEWS_CACHE.data || []);
     }
 });
 
