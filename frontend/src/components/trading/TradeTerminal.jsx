@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useAuth } from '../../context/AuthContext';
 import axios from 'axios';
-import { ExternalLink, DollarSign, Activity } from 'lucide-react';
+import { ExternalLink, IndianRupee, Activity } from 'lucide-react';
 
 export function TradeTerminal({ stock, onCancel }) {
     const { user, refreshBalance } = useAuth();
@@ -55,7 +55,7 @@ export function TradeTerminal({ stock, onCancel }) {
                 </div>
                 <div className="text-right">
                     <span className="text-xs text-text-muted mr-2">Market Price:</span>
-                    <span className="font-mono text-white">${price.toLocaleString('en-US', { minimumFractionDigits: 2 })}</span>
+                    <span className="font-mono text-white">₹{price.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
                 </div>
             </div>
 
@@ -103,7 +103,7 @@ export function TradeTerminal({ stock, onCancel }) {
                     <div className="flex flex-col gap-1">
                         <label className="text-xs text-text-muted font-mono uppercase">Total {action === 'BUY' ? 'Cost' : 'Return'}</label>
                         <div className="relative">
-                            <DollarSign className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-neutral-500" />
+                            <IndianRupee className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-neutral-500" />
                             <input
                                 type="text"
                                 disabled
@@ -117,7 +117,7 @@ export function TradeTerminal({ stock, onCancel }) {
                         <div className="flex justify-between items-center text-xs text-text-muted mb-3 font-mono">
                             <span>Available BP:</span>
                             <span className={action === 'BUY' && (price * quantity) > parseFloat(user?.cashBalance || 0) ? 'text-red-400 font-bold' : 'text-white'}>
-                                ${parseFloat(user?.cashBalance || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}
+                                ₹{parseFloat(user?.cashBalance || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
                             </span>
                         </div>
                         <button

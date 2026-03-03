@@ -55,7 +55,7 @@ export function Markets() {
 
                         data.forEach(d => {
                             const isUp = d.change >= 0;
-                            const formattedPrice = (d.price || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+                            const formattedPrice = (d.price || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
                             const formattedChange = `${isUp ? '+' : ''}${(d.change || 0).toFixed(2)}%`;
                             const points = Math.abs((d.price || 0) * ((d.change || 0) / 100)).toFixed(2);
 

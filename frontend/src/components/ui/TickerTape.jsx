@@ -47,7 +47,7 @@ export function TickerTape() {
                 {[...tickers, ...tickers].map((t, i) => (
                     <div key={i} className="flex flex-shrink-0 items-center gap-3 px-6 border-r border-white/10 last:border-0 hover:bg-white/5 transition-colors cursor-pointer">
                         <span className="font-bold font-mono text-sm text-white/90">{t.sym}</span>
-                        <span className="font-mono text-sm">${t.price.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                        <span className="font-mono text-sm">₹{t.price.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                         <span className={`text-xs font-bold ${t.change >= 0 ? 'text-success' : 'text-danger'}`}>
                             {t.change > 0 ? '+' : ''}{t.change.toFixed(2)}%
                         </span>

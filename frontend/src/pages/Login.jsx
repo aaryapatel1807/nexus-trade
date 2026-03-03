@@ -49,7 +49,7 @@ export const Login = () => {
                     {isRegistering ? 'INITIALIZE_ACCOUNT' : 'SECURE_LOGIN'}
                 </h2>
                 <p className="text-neutral-400 mb-8 font-mono text-sm relative z-10">
-                    {isRegistering ? 'Deploy your $100,000 virtual balance.' : 'Authenticate to access the terminal.'}
+                    {isRegistering ? 'Deploy your ₹10,00,000 virtual balance.' : 'Authenticate to access the terminal.'}
                 </p>
 
                 {error && (

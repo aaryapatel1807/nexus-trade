@@ -79,7 +79,7 @@ export function Dashboard() {
                     setWatchlist(data.map(d => ({
                         sym: d.sym.replace('.NS', ''),
                         name: d.name,
-                        price: (d.price || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }),
+                        price: (d.price || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }),
                         change: `${d.change >= 0 ? '+' : ''}${(d.change || 0).toFixed(2)}%`,
                         up: d.change >= 0
                     })))
@@ -217,7 +217,7 @@ export function Dashboard() {
                                                 </div>
                                             </div>
                                             <div className="text-right">
-                                                <div className="font-mono text-sm">${stock.price}</div>
+                                                <div className="font-mono text-sm">₹{stock.price}</div>
                                                 <div className={`text-xs font-medium flex items-center justify-end gap-1 ${stock.up ? 'text-success' : 'text-danger'}`}>
                                                     {stock.up ? <TrendingUp size={12} /> : <TrendingDown size={12} />}
                                                     {stock.change}

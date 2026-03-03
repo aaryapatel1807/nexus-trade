@@ -67,7 +67,7 @@ export function Navbar() {
                         <>
                             <div className="flex items-center gap-2 bg-white/5 border border-white/10 px-4 py-2 rounded-lg mr-2">
                                 <Wallet size={16} className="text-primary" />
-                                <span className="text-sm font-mono font-bold text-white">${parseFloat(user.cashBalance).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                                <span className="text-sm font-mono font-bold text-white">₹{parseFloat(user.cashBalance).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                             </div>
                             <button
                                 onClick={logout}
@@ -126,7 +126,7 @@ export function Navbar() {
                     {user ? (
                         <>
                             <div className="p-3 text-center text-primary font-mono font-bold">
-                                BALANCE: ${parseFloat(user.cashBalance).toLocaleString()}
+                                BALANCE: ₹{parseFloat(user.cashBalance).toLocaleString('en-IN')}
                             </div>
                             <button onClick={logout} className="p-3 text-center text-red-400">Disconnect</button>
                         </>

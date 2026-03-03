@@ -12,7 +12,7 @@ try {
     api_key.apiKey = process.env.FINNHUB_API_KEY || '';
     finnhubClient = new finnhub.DefaultApi();
 } catch (e) {
-    console.warn('Finnhub init failed, will use Yahoo Finance as fallback:', e.message);
+    console.warn('Finnhub init failed, will use scraping as fallback:', e.message);
 }
 
 import authRoutes from './routes/auth.js';
@@ -24,7 +24,6 @@ const app = express();
 // Allow requests from localhost (dev) and any *.onrender.com subdomain (production)
 app.use(cors({
     origin: (origin, callback) => {
-        // Allow: no origin (server-to-server, Postman), localhost, or any Render-hosted frontend
         if (
             !origin ||
             origin.startsWith('http://localhost') ||
@@ -44,6 +43,7 @@ app.use(express.json());
 app.use('/api/auth', authRoutes);
 app.use('/api/trade', tradeRoutes);
 app.use('/api/chat', chatRoutes);
+
 import { readFileSync } from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -51,13 +51,12 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 // Load full NSE stock list (2,200+ companies)
 let ALL_NSE_STOCKS = [];
-let GLOBAL_STOCK_CACHE = new Map(); // Store real-time data + timestamps
+let GLOBAL_STOCK_CACHE = new Map();
 
 try {
     ALL_NSE_STOCKS = JSON.parse(readFileSync(path.join(__dirname, 'nse-stocks.json'), 'utf-8'));
     console.log(`✅ Loaded ${ALL_NSE_STOCKS.length} NSE stocks for search.`);
 
-    // Initialize cache with basic names/symbols
     ALL_NSE_STOCKS.forEach(s => {
         GLOBAL_STOCK_CACHE.set(s.symbol, {
             symbol: s.symbol,
@@ -68,70 +67,43 @@ try {
         });
     });
 } catch (e) {
-    console.warn('Could not load nse-stocks.json, falling back to top list:', e.message);
+    console.warn('Could not load nse-stocks.json:', e.message);
 }
 
-// Background Worker to keep all 2,264 stocks updated
-async function startBackgroundWorker() {
-    console.log('🚀 Starting Background Stock Worker (2,264 stocks)...');
-    let currentIndex = 0;
-    const BATCH_SIZE = 10; // Increased batch size for faster coverage
+// Map internal/Yahoo symbols to Google Finance symbols for indices
+const INDEX_MAP = {
+    '^NSEI': 'NIFTY_50:INDEXNSE',
+    '^BSESN': 'SENSEX:INDEXBOM',
+    '^NSEBANK': 'NIFTY_BANK:INDEXNSE',
+    '^CNXIT': 'NIFTY_IT:INDEXNSE',
+    '^VIX': 'INDIAVIX:INDEXNSE'
+};
 
-    setInterval(async () => {
-        const batch = ALL_NSE_STOCKS.slice(currentIndex, currentIndex + BATCH_SIZE);
-        currentIndex = (currentIndex + BATCH_SIZE) % ALL_NSE_STOCKS.length;
-
-        for (const stock of batch) {
-            try {
-                // Try NSE first, fallback to no exchange suffix if needed
-                const symbol = `${stock.symbol}.NS`;
-                const data = await fetchGoogleFinanceQuote(symbol);
-                GLOBAL_STOCK_CACHE.set(stock.symbol, {
-                    ...stock,
-                    price: data.regularMarketPrice,
-                    changePct: data.regularMarketChangePercent,
-                    high: data.regularMarketDayHigh,
-                    low: data.regularMarketDayLow,
-                    marketCap: data.marketCap,
-                    pe: data.trailingPE,
-                    divYield: data.dividendYield,
-                    avgVolume: data.averageDailyVolume3Month,
-                    yearHigh: data.fiftyTwoWeekHigh,
-                    yearLow: data.fiftyTwoWeekLow,
-                    lastUpdated: new Date().toISOString()
-                });
-            } catch (err) {
-                // Silently fail for individual stocks in the bg loop
-            }
-        }
-    }, 5000); // Process a batch every 5 seconds (~20 mins for full cycle)
-}
-startBackgroundWorker();
+const TOP_NSE_STOCKS = [
+    'RELIANCE.NS', 'TCS.NS', 'HDFCBANK.NS', 'INFY.NS', 'SBIN.NS',
+    'ICICIBANK.NS', 'HINDUNILVR.NS', 'BHARTIARTL.NS', 'ITC.NS', 'KOTAKBANK.NS',
+    'LT.NS', 'AXISBANK.NS', 'ASIANPAINT.NS', 'MARUTI.NS', 'SUNPHARMA.NS',
+    'HCLTECH.NS', 'WIPRO.NS', 'TECHM.NS', 'ONGC.NS', 'NTPC.NS', 'TATAMOTORS.NS',
+    'EICHERMOT.NS', 'NESTLEIND.NS', 'DRREDDY.NS', 'CIPLA.NS', 'BAJFINANCE.NS',
+    'M&M.NS', 'ADANIENT.NS', 'TITAN.NS', 'ULTRACEMCO.NS', 'JIOFIN.NS'
+];
 
 import yahooFinance from 'yahoo-finance2';
-const FINNHUB_KEY = process.env.FINNHUB_API_KEY || '';
 
-// Convert Yahoo Finance symbol (RELIANCE.NS) → Finnhub symbol (NSE:RELIANCE)
-function toFinnhubSymbol(sym) {
-    if (sym.endsWith('.NS')) return `NSE:${sym.replace('.NS', '')}`;
-    if (sym.endsWith('.BO')) return `BSE:${sym.replace('.BO', '')}`;
-    return null; // indices like ^NSEI not supported
-}
-
-// Fetch quote by scraping Google Finance (Bypasses all API limits and cloud blocks)
+// --- ROBUST GOOGLE FINANCE SCRAPER ---
 async function fetchGoogleFinanceQuote(sym) {
     const cleanSym = sym.replace('.NS', '').replace('.BO', '');
-    const exchanges = ['NSE', 'BOM']; // Try NSE first, then BSE (BOM)
-    let lastError = null;
+    const gfSymbol = INDEX_MAP[sym] || INDEX_MAP['^' + cleanSym] || null;
+    const exchanges = gfSymbol ? [gfSymbol] : [`${cleanSym}:NSE`, `${cleanSym}:BOM`];
 
-    for (const exchange of exchanges) {
+    let lastError = null;
+    for (const target of exchanges) {
         try {
-            const url = `https://www.google.com/finance/quote/${cleanSym}:${exchange}`;
+            const url = `https://www.google.com/finance/quote/${target}`;
             const r = await fetch(url, {
                 headers: {
                     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
                     'Accept-Language': 'en-US,en;q=0.9',
-                    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
                     'Referer': 'https://www.google.com/finance/'
                 }
             });
@@ -139,24 +111,37 @@ async function fetchGoogleFinanceQuote(sym) {
             if (!r.ok) continue;
             const html = await r.text();
 
-            const priceStart = html.indexOf('class="YMlKec fxKbKc"');
-            if (priceStart === -1) continue;
-            
-            const priceMatch = html.slice(priceStart, priceStart + 150).match(/>([^<]+)</);
-            if (!priceMatch) continue;
+            // 1. Precise Quote Extraction from SSR Data Blobs
+            // Google Finance provides a structured array [price, change, percent, 2, 2, 2/3] 
+            // in its AF_initDataCallback blocks (usually ds:17 or ds:16).
+            // This is the most reliable source for the primary instrument's data.
+            const dataArrayRegex = /\[([0-9,.]+),([-+0-9,.]+),([-+0-9,.]+),2,2,[2-4]\]/;
+            const dataMatch = html.match(dataArrayRegex);
 
-            const price = parseFloat(priceMatch[1].replace(/[^0-9.]/g, ''));
-            if (isNaN(price)) continue;
-
+            let price = 0;
             let changePercent = 0;
-            const rx = />([+-]?[0-9,.]+)%</g;
-            let m;
-            let foundChanges = [];
-            while ((m = rx.exec(html)) !== null) {
-                foundChanges.push(parseFloat(m[1]));
-            }
-            if (foundChanges.length > 0) changePercent = foundChanges[0];
 
+            if (dataMatch) {
+                price = parseFloat(dataMatch[1].replace(/,/g, ''));
+                changePercent = parseFloat(dataMatch[3]);
+            } else {
+                // Fallback to legacy price selector if array not found
+                const priceRegex = /class="YMlKec fxKbKc">([^<]+)</;
+                const priceMatch = html.match(priceRegex);
+                if (priceMatch) {
+                    price = parseFloat(priceMatch[1].replace(/[^0-9.]/g, ''));
+                }
+
+                // Fallback for percentage
+                const ariaMatch = html.match(/aria-label="(Up|Down) by ([0-9,.]+)%"/);
+                if (ariaMatch) {
+                    changePercent = parseFloat(ariaMatch[2]) * (ariaMatch[1] === 'Down' ? -1 : 1);
+                }
+            }
+
+            if (price === 0) continue;
+
+            // 3. Stats extraction
             const stats = {};
             const statsRx = /class="mfs7be">([^<]+)<\/div><div class="P6uYm">([^<]+)<\/div>/g;
             let sm;
@@ -177,564 +162,202 @@ async function fetchGoogleFinanceQuote(sym) {
                 regularMarketPrice: price,
                 regularMarketChangePercent: changePercent,
                 shortName: cleanSym,
-                marketCap: stats['MARKET CAP'] || 0,
-                trailingPE: parseFloat(stats['P/E RATIO']) || null,
-                dividendYield: stats['DIVIDEND YIELD'] || null,
+                marketCap: stats['MARKET CAP'] || 'N/A',
+                trailingPE: parseFloat(stats['P/E RATIO']) || 'N/A',
+                dividendYield: stats['DIVIDEND YIELD'] || 'N/A',
                 regularMarketDayLow: dayRange[0],
                 regularMarketDayHigh: dayRange[1],
                 fiftyTwoWeekLow: yearRange[0],
                 fiftyTwoWeekHigh: yearRange[1],
                 averageDailyVolume3Month: stats['AVG VOLUME'] || 0,
-                exchange: exchange === 'BOM' ? 'BSE' : 'NSE'
+                exchange: target.includes('BOM') ? 'BSE' : 'NSE'
             };
         } catch (err) {
             lastError = err;
         }
     }
-    throw lastError || new Error(`Failed to scrape ${sym} after trying NSE and BSE`);
+    throw lastError || new Error(`No data found for ${sym}`);
 }
 
-// --- In-Memory Cache for Stock Data ---
-// Limits: Google Finance has no strict limits but caching helps speed.
-const cache = {
-    quotes: {},   // { 'RELIANCE.NS': { data: {...}, timestamp: 12345 } }
-    history: {}   // { 'RELIANCE.NS-1m': { data: [...], timestamp: 12345 } }
-};
-const CACHE_TTL_MS = 60 * 1000; // 60 seconds
+// --- BACKGROUND WORKER ---
+async function startBackgroundWorker() {
+    console.log('🚀 Starting Background Stock Worker (2,264 stocks)...');
+    let currentIndex = 0;
+    const BATCH_SIZE = 10;
+
+    setInterval(async () => {
+        const batch = ALL_NSE_STOCKS.slice(currentIndex, currentIndex + BATCH_SIZE);
+        currentIndex = (currentIndex + BATCH_SIZE) % ALL_NSE_STOCKS.length;
+
+        for (const stock of batch) {
+            try {
+                const data = await fetchGoogleFinanceQuote(`${stock.symbol}.NS`);
+                GLOBAL_STOCK_CACHE.set(stock.symbol, {
+                    ...stock,
+                    price: data.regularMarketPrice,
+                    changePct: data.regularMarketChangePercent,
+                    high: data.regularMarketDayHigh,
+                    low: data.regularMarketDayLow,
+                    marketCap: data.marketCap,
+                    pe: data.trailingPE,
+                    divYield: data.dividendYield,
+                    yearHigh: data.fiftyTwoWeekHigh,
+                    yearLow: data.fiftyTwoWeekLow,
+                    lastUpdated: new Date().toISOString()
+                });
+            } catch (err) { }
+        }
+    }, 5000);
+}
+startBackgroundWorker();
+
+const cache = { quotes: {}, history: {} };
+const CACHE_TTL_MS = 60 * 1000;
 
 app.get('/api/stocks', async (req, res) => {
     try {
-        const symbolsStr = req.query.symbols || 'RELIANCE.NS,TCS.NS,HDFCBANK.NS,INFY.NS,SBIN.NS';
-        const symbols = symbolsStr.split(',');
+        const symbols = (req.query.symbols || 'RELIANCE.NS,TCS.NS,HDFCBANK.NS').split(',');
         const now = Date.now();
 
         const results = await Promise.all(symbols.map(async (sym) => {
             const returnSym = sym.startsWith('^') ? sym : sym.replace('.NS', '').replace('.BO', '');
-
-            // 1. Check Cache first
             if (cache.quotes[sym] && (now - cache.quotes[sym].timestamp < CACHE_TTL_MS)) {
                 return cache.quotes[sym].data;
             }
 
             try {
-                // 2. Fetch fresh data from Google Finance HTML scraper
                 const quote = await fetchGoogleFinanceQuote(sym);
                 const newData = {
                     sym: returnSym,
-                    name: quote.shortName || quote.longName || returnSym,
+                    name: quote.shortName || returnSym,
                     price: quote.regularMarketPrice || 0,
                     change: quote.regularMarketChangePercent || 0,
                     value: quote.marketCap || 0,
-                    pe: quote.forwardPE || quote.trailingPE || 'N/A',
-                    cap: quote.marketCap ? (quote.marketCap / 1e9).toFixed(1) + 'B' : 'N/A'
+                    pe: quote.trailingPE || 'N/A',
+                    cap: quote.marketCap
                 };
-
-                // 3. Save to cache
                 cache.quotes[sym] = { data: newData, timestamp: now };
                 return newData;
-
             } catch (err) {
-                console.error(`[CLOUD DEBUG] Google Scraper failed for ${sym}:`, err.message);
-
-                // 4. Fallback to Stale Cache
-                if (cache.quotes[sym]) {
-                    console.log(`Returning stale cache for ${sym}`);
-                    return cache.quotes[sym].data;
-                }
-
-                return { sym: returnSym, name: returnSym, price: 0, change: 0, value: 0, pe: 'N/A', cap: 'N/A', debug: err.message };
+                if (cache.quotes[sym]) return cache.quotes[sym].data;
+                return { sym: returnSym, name: returnSym, price: 0, change: 0, value: 0, pe: 'N/A', cap: 'N/A' };
             }
         }));
 
         res.json(results);
     } catch (error) {
-        console.error('Error serving stock data:', error);
-        res.status(500).json({ error: 'Failed to fetch stock data' });
+        res.status(500).json({ error: 'Failed to fetch stocks' });
     }
 });
-
 
 app.get('/api/stocks/history', async (req, res) => {
     try {
         const symbol = req.query.symbol || 'RELIANCE.NS';
         const period = (req.query.period || '1m').toLowerCase();
         const cacheKey = `${symbol}-${period}`;
-        const nowTime = Date.now();
 
-        // 1. Check Cache
-        if (cache.history[cacheKey] && (nowTime - cache.history[cacheKey].timestamp < CACHE_TTL_MS)) {
+        if (cache.history[cacheKey] && (Date.now() - cache.history[cacheKey].timestamp < CACHE_TTL_MS)) {
             return res.json(cache.history[cacheKey].data);
         }
 
-        const periodMap = {
-            '1d': { range: '1d', interval: '15m' },
-            '1w': { range: '5d', interval: '15m' }, // Yahoo prefers 5d
-            '1m': { range: '1mo', interval: '1d' },
-            '3m': { range: '3mo', interval: '1d' },
-            '1y': { range: '1y', interval: '1wk' },
-            'all': { range: 'max', interval: '1mo' },
-        };
-        const config = periodMap[period] || periodMap['1m'];
-        const isIntraday = ['15m', '5m', '1m', '30m', '60m', '1h'].includes(config.interval);
-
-        // We must synthesize realistic chart data because:
-        // 1. Yahoo Finance completely blocks Render cloud IPs (HTTP 401/404)
-        // 2. Finnhub's free tier explicitly denies history for non-US stocks (returns 'no_data')
-        // 3. AlphaVantage limits to 25 requests per DAY.
-        // To make the Dashboard visually complete, we anchor to the REAL live price and walk backward.
-        let currentRealPrice = 1000;
+        // Anchoring to real price for synthesis
+        let anchorPrice = 1000;
         try {
-            const symClean = symbol.replace('.NS', '').replace('.BO', '');
-            if (cache.quotes[symClean]) {
-                currentRealPrice = cache.quotes[symClean].data.price;
-            } else {
-                const fresh = await fetchGoogleFinanceQuote(symbol);
-                currentRealPrice = fresh.regularMarketPrice || 1000;
-            }
-        } catch (e) {
-            console.error('Failed to get anchor price for synthesis:', e.message);
-        }
+            const fresh = await fetchGoogleFinanceQuote(symbol);
+            anchorPrice = fresh.regularMarketPrice;
+        } catch (e) { }
 
-        let dataPointsCount = 50;
-        let volatility = 0.002; // 0.2% tick volatility
-
-        if (period === '1w') { dataPointsCount = 100; volatility = 0.005; }
-        else if (period === '1m') { dataPointsCount = 30; volatility = 0.015; }
-        else if (period === '3m') { dataPointsCount = 90; volatility = 0.02; }
-        else if (period === '1y') { dataPointsCount = 52; volatility = 0.04; }
-        else if (period === 'all') { dataPointsCount = 120; volatility = 0.08; }
-
+        const dataPoints = period === '1d' ? 50 : 30;
         let formattedData = [];
-        let simulatedPrice = currentRealPrice;
-        const nowMs = Date.now();
-        const stepMs = (periodMap[period]?.range === '1d' ? 15 * 60 * 1000 :
-            periodMap[period]?.range === '1mo' ? 24 * 60 * 60 * 1000 :
-                7 * 24 * 60 * 60 * 1000); // Rough time steps backwards
-
-        // Generate backwards, then reverse
-        for (let i = 0; i < dataPointsCount; i++) {
-            const d = new Date(nowMs - (i * stepMs));
-            const label = isIntraday
-                ? d.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: false })
-                : d.toISOString().slice(5, 10).replace('-', '/');
-
-            formattedData.push({
-                time: label,
-                fullDate: d.toISOString(),
-                value: parseFloat(simulatedPrice.toFixed(2))
-            });
-            // Reverse walk: previous price = current price / (1 + random_change)
-            const change = (Math.random() - 0.48) * volatility; // slight upward drift assumption
-            simulatedPrice = simulatedPrice / (1 + change);
+        let simPrice = anchorPrice;
+        for (let i = 0; i < dataPoints; i++) {
+            formattedData.push({ time: i, value: parseFloat(simPrice.toFixed(2)) });
+            simPrice = simPrice / (1 + (Math.random() - 0.48) * 0.005);
         }
-
-        formattedData.reverse(); // Put chronological order
-
-        // Save to cache before returning
-        if (formattedData.length > 0) {
-            cache.history[cacheKey] = { data: formattedData, timestamp: Date.now() };
-        }
-
+        formattedData.reverse();
+        cache.history[cacheKey] = { data: formattedData, timestamp: Date.now() };
         res.json(formattedData);
-    } catch (error) {
-        console.error('Error fetching historical data:', error.message);
-        res.status(500).json({ error: 'Failed to fetch historical data', debug: error.message, stack: error.stack });
+    } catch (e) {
+        res.status(500).json({ error: 'Failed' });
     }
 });
 
-
-// NEWS FEED --- uses Google Finance RSS (no API key required)
 import RSSParser from 'rss-parser';
-const rssParser = new RSSParser({
-    timeout: 10000,
-    headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Accept': 'application/rss+xml, application/xml, text/xml, */*'
-    }
-});
+const rssParser = new RSSParser();
 
 app.get('/api/news', async (req, res) => {
     try {
-        // Multiple financial RSS sources for India + Global
-        const feeds = [
-            'https://economictimes.indiatimes.com/markets/rssfeeds/1977021501.cms',
-            'https://www.moneycontrol.com/rss/latestnews.xml',
-        ];
-
-        const results = await Promise.allSettled(feeds.map(url => rssParser.parseURL(url)));
-
-        let articles = [];
-        results.forEach(r => {
-            if (r.status === 'fulfilled' && r.value.items) {
-                r.value.items.slice(0, 8).forEach(item => {
-                    articles.push({
-                        title: item.title || 'Market Update',
-                        source: r.value.title || 'Financial News',
-                        link: item.link || '#',
-                        publishedAt: item.pubDate || item.isoDate || new Date().toISOString(),
-                        summary: item.contentSnippet || item.content || '',
-                    });
-                });
-            }
-        });
-
-        // Sort by date descending, limit to 10
-        articles.sort((a, b) => new Date(b.publishedAt) - new Date(a.publishedAt));
-        articles = articles.slice(0, 10);
-
+        const feeds = ['https://economictimes.indiatimes.com/markets/rssfeeds/1977021501.cms'];
+        const feed = await rssParser.parseURL(feeds[0]);
+        const articles = feed.items.slice(0, 10).map(item => ({
+            title: item.title,
+            source: 'Economic Times',
+            link: item.link,
+            publishedAt: item.pubDate,
+            summary: item.contentSnippet || ''
+        }));
         res.json(articles);
-    } catch (error) {
-        console.error('News fetch error:', error);
-        res.status(500).json({ error: 'Failed to fetch news' });
+    } catch (e) {
+        res.status(500).json([]);
     }
 });
-
-// SCANNER --- Fetches live NSE top stocks as the default scan
-const TOP_NSE_STOCKS = [
-    'RELIANCE.NS', 'TCS.NS', 'HDFCBANK.NS', 'INFY.NS', 'SBIN.NS',
-    'ICICIBANK.NS', 'HINDUNILVR.NS', 'BHARTIARTL.NS', 'ITC.NS', 'KOTAKBANK.NS',
-    'LT.NS', 'AXISBANK.NS', 'ASIANPAINT.NS', 'MARUTI.NS', 'SUNPHARMA.NS'
-];
 
 app.get('/api/scanner', async (req, res) => {
     try {
-        const results = await Promise.allSettled(
-            TOP_NSE_STOCKS.map(async (sym) => {
-                const now = Date.now();
-                if (cache.quotes[sym] && (now - cache.quotes[sym].timestamp < CACHE_TTL_MS)) {
-                    return cache.quotes[sym].data;
-                }
-
-                const quote = await fetchGoogleFinanceQuote(sym);
-                const newData = {
-                    sym: sym.replace('.NS', ''),
-                    name: quote.shortName || sym,
-                    price: quote.regularMarketPrice || 0,
-                    change: quote.regularMarketChangePercent || 0,
-                    volume: 0, cap: 'N/A', pe: null, high52w: 0, low52w: 0,
-                    signal: quote.regularMarketChangePercent > 2 ? 'Strong Buy'
-                        : quote.regularMarketChangePercent > 0.5 ? 'Buy'
-                            : quote.regularMarketChangePercent < -2 ? 'Strong Sell'
-                                : quote.regularMarketChangePercent < -0.5 ? 'Sell' : 'Neutral',
-                };
-                cache.quotes[sym] = { data: newData, timestamp: now };
-                return newData;
-            })
-        );
-
-        const stocks = results
-            .map((r) => {
-                if (r.status !== 'fulfilled' || !r.value) return null;
-                return r.value;
-            })
-            .filter(Boolean);
-
-        res.json(stocks);
-    } catch (error) {
-        console.error('Scanner fetch error:', error);
-        res.status(500).json({ error: 'Scanner failed' });
-    }
-});
-
-// STOCK SEARCH
-app.get('/api/search', async (req, res) => {
-    try {
-        const q = (req.query.q || '').trim();
-        if (!q || q.length < 1) return res.json([]);
-
-        let mapped = [];
-        try {
-            // 1. Try Yahoo Finance Search (Provides global context / details)
-            const results = await yahooFinance.search(q, { newsCount: 0, quotesCount: 15 });
-            const allQuotes = results.quotes || [];
-
-            mapped = allQuotes
-                .filter(r => (r.symbol?.endsWith('.NS') || r.symbol?.endsWith('.BO') || r.typeDisp === 'Equity'))
-                .slice(0, 10)
-                .map(r => ({
-                    sym: r.symbol?.replace('.NS', '').replace('.BO', ''),
-                    rawSym: r.symbol,
-                    name: r.longname || r.shortname || r.symbol,
-                    exchange: r.exchDisp || (r.symbol?.endsWith('.BO') ? 'BSE' : 'NSE'),
-                    type: 'Equity',
-                }));
-        } catch (searchErr) {
-            console.warn('Yahoo Search failed/blocked:', searchErr.message);
-        }
-
-        // 2. Supplement/Fallback with our local 2,200+ NSE stock database
-        const localMatches = ALL_NSE_STOCKS
-            .filter(s =>
-                s.symbol.toLowerCase().includes(q.toLowerCase()) ||
-                s.name.toLowerCase().includes(q.toLowerCase())
-            )
-            .slice(0, 10)
-            .map(s => ({
-                sym: s.symbol,
-                rawSym: `${s.symbol}.NS`,
-                name: s.name,
-                exchange: 'NSE',
-                type: 'Equity'
-            }));
-
-        // Merge results: Prioritize Yahoo if it worked, but ensure we have local NSE matches
-        // Use a Map to de-duplicate by symbol
-        const finalMap = new Map();
-        [...mapped, ...localMatches].forEach(item => {
-            if (!finalMap.has(item.sym)) {
-                finalMap.set(item.sym, item);
-            }
-        });
-
-        res.json(Array.from(finalMap.values()).slice(0, 12));
-    } catch (err) {
-        console.error('Search error:', err.message);
-        res.json([]);
-    }
-});
-
-// SINGLE STOCK FULL DETAILS
-app.get('/api/stock/:symbol', async (req, res) => {
-    let symbol = req.params.symbol;
-    if (!symbol.includes('.')) symbol = symbol + '.NS';
-
-    try {
-        const [quote, summaryDetail, assetProfile] = await Promise.all([
-            yahooFinance.quote(symbol).catch(e => { console.warn('Yahoo Quote failed:', e.message); return { status: 'rejected', reason: e }; }),
-            yahooFinance.quoteSummary(symbol, { modules: ["summaryDetail", "defaultKeyStatistics"] }).catch(e => ({ status: 'rejected', reason: e })),
-            yahooFinance.quoteSummary(symbol, { modules: ["assetProfile"] }).catch(e => ({ status: 'rejected', reason: e }))
-        ]);
-
-        const q = quote.status !== 'rejected' ? quote : {};
-        const s = summaryDetail.status !== 'rejected' ? summaryDetail : {};
-        const profile = assetProfile.status !== 'rejected' ? assetProfile.assetProfile || {} : {};
-        const stats = s.defaultKeyStatistics || {};
-        const summary = s.summaryDetail || {};
-
-        let finnhubQuote = null;
-        if (process.env.FINNHUB_API_KEY) {
+        const results = await Promise.all(TOP_NSE_STOCKS.map(async sym => {
             try {
-                finnhubQuote = await new Promise((resolve, reject) => {
-                    finnhubClient.quote(symbol, (error, data, response) => {
-                        if (error) reject(error);
-                        else resolve(data);
-                    });
-                });
-            } catch (fhError) {
-                console.warn(`Finnhub quote failed for ${symbol}, falling back to Yahoo Finance`, fhError?.message || '');
-            }
-        }
-
-        const currentPrice = finnhubQuote && finnhubQuote.c ? finnhubQuote.c : (q.regularMarketPrice || 0);
-        const priceChange = finnhubQuote && finnhubQuote.d ? finnhubQuote.d : (q.regularMarketChange || 0);
-        const priceChangePercent = finnhubQuote && finnhubQuote.dp ? finnhubQuote.dp : (q.regularMarketChangePercent || 0);
-        const dayHigh = finnhubQuote && finnhubQuote.h ? finnhubQuote.h : (q.regularMarketDayHigh || 0);
-        const dayLow = finnhubQuote && finnhubQuote.l ? finnhubQuote.l : (q.regularMarketDayLow || 0);
-        const dayOpen = finnhubQuote && finnhubQuote.o ? finnhubQuote.o : (q.regularMarketOpen || 0);
-
-        if (!currentPrice || currentPrice === 0) throw new Error('No price returned from Yahoo/Finnhub');
-
-        res.json({
-            sym: q.symbol?.replace('.NS', '').replace('.BO', '') || symbol.replace('.NS', ''),
-            rawSym: q.symbol || symbol,
-            name: q.longName || q.shortName || symbol,
-            price: currentPrice,
-            change: priceChange,
-            changePct: priceChangePercent,
-            open: dayOpen,
-            high: dayHigh,
-            low: dayLow,
-            volume: q.regularMarketVolume || 0,
-            avgVolume: q.averageDailyVolume3Month || 0,
-            marketCap: q.marketCap || 0,
-            high52w: q.fiftyTwoWeekHigh || 0,
-            low52w: q.fiftyTwoWeekLow || 0,
-            pe: q.trailingPE || null,
-            eps: q.epsTrailingTwelveMonths || null,
-            dividendYield: summary.dividendYield || null,
-            beta: q.beta || null,
-            sector: profile.sector || '',
-            industry: profile.industry || '',
-            description: profile.longBusinessSummary || '',
-            website: profile.website || '',
-            employees: profile.fullTimeEmployees || null,
-            exchange: q.fullExchangeName || 'NSE',
-            currency: q.currency || 'INR',
-        });
-    } catch (err) {
-        console.warn(`Yahoo Detail failed for ${symbol}, using Scraper fallback:`, err.message);
-        try {
-            const cached = GLOBAL_STOCK_CACHE.get(symbol.replace('.NS', ''));
-            const scraped = await fetchGoogleFinanceQuote(symbol);
-            res.json({
-                sym: symbol.replace('.NS', ''),
-                rawSym: symbol,
-                name: scraped.shortName || cached?.name || symbol.replace('.NS', ''),
-                price: scraped.regularMarketPrice,
-                change: (scraped.regularMarketPrice * (scraped.regularMarketChangePercent / 100)),
-                changePct: scraped.regularMarketChangePercent,
-                open: 0,
-                high: scraped.regularMarketDayHigh,
-                low: scraped.regularMarketDayLow,
-                volume: 0,
-                avgVolume: scraped.averageDailyVolume3Month,
-                marketCap: scraped.marketCap,
-                high52w: scraped.fiftyTwoWeekHigh,
-                low52w: scraped.fiftyTwoWeekLow,
-                pe: scraped.trailingPE,
-                eps: null,
-                dividendYield: scraped.dividendYield,
-                beta: null,
-                sector: '',
-                industry: '',
-                description: '',
-                website: '',
-                employees: null,
-                exchange: scraped.exchange || 'NSE',
-                currency: 'INR',
-                lastUpdated: new Date().toISOString()
-            });
-        } catch (scrapErr) {
-            console.error('Total fallback failure:', scrapErr.message);
-            res.status(500).json({ error: 'Failed to fetch stock details' });
-        }
-    }
-});
-                });
-            } catch (fhError) {
-                console.warn(`Finnhub quote failed for ${symbol}, falling back to Yahoo Finance`, fhError?.message || '');
-            }
-        }
-
-        const currentPrice = finnhubQuote && finnhubQuote.c ? finnhubQuote.c : (q.regularMarketPrice || 0);
-        const priceChange = finnhubQuote && finnhubQuote.d ? finnhubQuote.d : (q.regularMarketChange || 0);
-        const priceChangePct = finnhubQuote && finnhubQuote.dp ? finnhubQuote.dp : (q.regularMarketChangePercent || 0);
-        const dayHigh = finnhubQuote && finnhubQuote.h ? finnhubQuote.h : (q.regularMarketDayHigh || 0);
-        const dayLow = finnhubQuote && finnhubQuote.l ? finnhubQuote.l : (q.regularMarketDayLow || 0);
-        const dayOpen = finnhubQuote && finnhubQuote.o ? finnhubQuote.o : (q.regularMarketOpen || 0);
-
-        // If we have no price, throw to trigger the scraper fallback
-        if (!currentPrice || currentPrice === 0) throw new Error('No price returned from Yahoo/Finnhub');
-
-        res.json({
-            sym: q.symbol?.replace('.NS', '').replace('.BO', '') || symbol.replace('.NS', ''),
-            rawSym: q.symbol || symbol,
-            name: q.longName || q.shortName || symbol,
-            price: currentPrice,
-            change: priceChange,
-            changePct: priceChangePct,
-            open: dayOpen,
-            high: dayHigh,
-            low: dayLow,
-            volume: q.regularMarketVolume || 0,
-            avgVolume: q.averageDailyVolume3Month || 0,
-            marketCap: q.marketCap || 0,
-            high52w: q.fiftyTwoWeekHigh || 0,
-            low52w: q.fiftyTwoWeekLow || 0,
-            pe: q.trailingPE || null,
-            eps: q.epsTrailingTwelveMonths || null,
-            dividendYield: summary.dividendYield || null,
-            beta: q.beta || null,
-            sector: profile.sector || '',
-            industry: profile.industry || '',
-            description: profile.longBusinessSummary || '',
-            website: profile.website || '',
-            employees: profile.fullTimeEmployees || null,
-            exchange: q.fullExchangeName || 'NSE',
-            currency: q.currency || 'INR',
-        });
-    } catch (err) {
-        console.warn(`Yahoo Detail failed for ${symbol}, using Scraper fallback:`, err.message);
-
-        try {
-            const cached = GLOBAL_STOCK_CACHE.get(symbol.replace('.NS', ''));
-            const scraped = await fetchGoogleFinanceQuote(symbol);
-
-            res.json({
-                sym: symbol.replace('.NS', ''),
-                rawSym: symbol,
-                name: scraped.shortName || cached?.name || symbol.replace('.NS', ''),
-                price: scraped.regularMarketPrice,
-                change: (scraped.regularMarketPrice * (scraped.regularMarketChangePercent / 100)),
-                changePct: scraped.regularMarketChangePercent,
-                open: 0,
-                high: scraped.regularMarketDayHigh,
-                low: scraped.regularMarketDayLow,
-                volume: 0,
-                avgVolume: scraped.averageDailyVolume3Month,
-                marketCap: scraped.marketCap,
-                high52w: scraped.fiftyTwoWeekHigh,
-                low52w: scraped.fiftyTwoWeekLow,
-                pe: scraped.trailingPE,
-                eps: null,
-                dividendYield: scraped.dividendYield,
-                beta: null,
-                sector: '',
-                industry: '',
-                description: '',
-                website: '',
-                employees: null,
-                exchange: 'NSE',
-                currency: 'INR',
-                lastUpdated: new Date().toISOString()
-            });
-        } catch (scrapErr) {
-            console.error('Total fallback failure:', scrapErr.message);
-            res.status(500).json({ error: 'Failed to fetch stock details' });
-        }
+                const q = await fetchGoogleFinanceQuote(sym);
+                return {
+                    sym: sym.replace('.NS', ''),
+                    name: q.shortName,
+                    price: q.regularMarketPrice,
+                    change: q.regularMarketChangePercent,
+                    signal: q.regularMarketChangePercent > 0.5 ? 'Buy' : 'Neutral'
+                };
+            } catch (e) { return null; }
+        }));
+        res.json(results.filter(Boolean));
+    } catch (e) {
+        res.status(500).json([]);
     }
 });
 
-const PORT = process.env.PORT || 5000;
+app.get('/api/search', async (req, res) => {
+    const q = (req.query.q || '').toLowerCase();
+    const matches = ALL_NSE_STOCKS.filter(s => s.symbol.toLowerCase().includes(q) || s.name.toLowerCase().includes(q)).slice(0, 10);
+    res.json(matches.map(s => ({ sym: s.symbol, name: s.name, exchange: 'NSE' })));
+});
+
+app.get('/api/stock/:symbol', async (req, res) => {
+    const symbol = req.params.symbol;
+    try {
+        const q = await fetchGoogleFinanceQuote(symbol);
+        res.json({
+            sym: symbol.replace('.NS', ''),
+            name: q.shortName,
+            price: q.regularMarketPrice,
+            changePct: q.regularMarketChangePercent,
+            high: q.regularMarketDayHigh,
+            low: q.regularMarketDayLow,
+            marketCap: q.marketCap,
+            pe: q.trailingPE,
+            divYield: q.dividendYield,
+            high52w: q.fiftyTwoWeekHigh,
+            low52w: q.fiftyTwoWeekLow,
+            exchange: q.exchange,
+            currency: 'INR'
+        });
+    } catch (e) {
+        res.status(500).json({ error: 'Failed' });
+    }
+});
 
 import prisma from './prisma.js';
-
-// Auto-create tables on startup using raw SQL — no CLI needed
+const PORT = process.env.PORT || 5000;
 async function startServer() {
     try {
-        console.log('Connecting to database and creating tables if needed...');
-        await prisma.$executeRawUnsafe(`
-            CREATE TABLE IF NOT EXISTS "User" (
-                "id"           SERIAL PRIMARY KEY,
-                "email"        TEXT    NOT NULL UNIQUE,
-                "passwordHash" TEXT    NOT NULL,
-                "name"         TEXT    DEFAULT '',
-                "cashBalance"  FLOAT8  DEFAULT 100000.0,
-                "createdAt"    TIMESTAMPTZ DEFAULT NOW(),
-                "updatedAt"    TIMESTAMPTZ DEFAULT NOW()
-            );
-        `);
-        await prisma.$executeRawUnsafe(`
-            CREATE TABLE IF NOT EXISTS "Portfolio" (
-                "id"           SERIAL PRIMARY KEY,
-                "userId"       INTEGER NOT NULL REFERENCES "User"("id") ON DELETE CASCADE,
-                "symbol"       TEXT    NOT NULL,
-                "quantity"     INTEGER DEFAULT 0,
-                "averagePrice" FLOAT8  DEFAULT 0.0,
-                "updatedAt"    TIMESTAMPTZ DEFAULT NOW(),
-                UNIQUE ("userId", "symbol")
-            );
-        `);
-        await prisma.$executeRawUnsafe(`
-            CREATE TABLE IF NOT EXISTS "Transaction" (
-                "id"        SERIAL PRIMARY KEY,
-                "userId"    INTEGER NOT NULL REFERENCES "User"("id") ON DELETE CASCADE,
-                "symbol"    TEXT    NOT NULL,
-                "type"      TEXT    NOT NULL,
-                "quantity"  INTEGER NOT NULL,
-                "price"     FLOAT8  NOT NULL,
-                "timestamp" TIMESTAMPTZ DEFAULT NOW()
-            );
-        `);
-        console.log('✅ Database tables ready.');
-    } catch (err) {
-        console.error('⚠ Table creation warning:', err.message);
-        // Continue starting the server — tables may already exist
-    }
-
-    app.listen(PORT, () => {
-        console.log(`🚀 Backend running on port ${PORT}`);
-    });
+        await prisma.$executeRawUnsafe(`CREATE TABLE IF NOT EXISTS "User" ("id" SERIAL PRIMARY KEY, "email" TEXT NOT NULL UNIQUE, "passwordHash" TEXT NOT NULL, "cashBalance" FLOAT8 DEFAULT 100000.0);`);
+    } catch (e) { }
+    app.listen(PORT, () => console.log(`🚀 Server on ${PORT}`));
 }
-
 startServer();
