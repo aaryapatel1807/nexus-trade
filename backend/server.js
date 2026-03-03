@@ -101,7 +101,7 @@ async function fetchGoogleFinanceQuote(sym) {
     for (const target of exchanges) {
         try {
             const url = `https://www.google.com/finance/quote/${target}`;
-            const r = await fetch(url, {
+            const r = await fetchWithTimeout(url, {
                 headers: {
                     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
                     'Accept-Language': 'en-US,en;q=0.9',
@@ -243,40 +243,56 @@ app.get('/api/stocks', async (req, res) => {
     }
 });
 
-app.get('/api/stocks/history', async (req, res) => {
+// --- HYPER-SAFE FETCH WITH TIMEOUT ---
+async function fetchWithTimeout(url, options = {}, timeout = 5000) {
+    const controller = new AbortController();
+    const id = setTimeout(() => controller.abort(), timeout);
     try {
-        const symbol = req.query.symbol || 'RELIANCE.NS';
-        const period = (req.query.period || '1m').toLowerCase();
-        const clean = symbol.replace('.NS', '').replace('.BO', '');
+        const response = await fetch(url, { ...options, signal: controller.signal });
+        clearTimeout(id);
+        return response;
+    } catch (e) {
+        clearTimeout(id);
+        throw e;
+    }
+}
 
-        // Cache for simulated history
-        const cache = { history: {} };
-        const cacheKey = `${symbol}-${period}`;
+app.get('/api/stocks/history', async (req, res) => {
+    const symbol = req.query.symbol || 'RELIANCE.NS';
+    const period = (req.query.period || '1m').toLowerCase();
+    const clean = symbol.replace('.NS', '').replace('.BO', '');
 
-        // Anchoring to cached price if available (INSTANT)
+    try {
+        // 1. Get current price (HYPER-FAST: No Scraping on Request)
         let anchorPrice = 1000;
         const cached = GLOBAL_STOCK_CACHE.get(clean);
+
         if (cached && cached.price > 0) {
             anchorPrice = cached.price;
         } else {
-            // Only scrape if not in cache (Rare)
-            try {
-                const fresh = await fetchGoogleFinanceQuote(symbol);
-                if (fresh) anchorPrice = fresh.regularMarketPrice;
-            } catch (e) { }
+            // Trigger background refresh for next time, but don't wait
+            fetchGoogleFinanceQuote(symbol).then(q => {
+                if (q) GLOBAL_STOCK_CACHE.set(clean, { ...GLOBAL_STOCK_CACHE.get(clean), price: q.regularMarketPrice, lastUpdated: new Date().toISOString() });
+            }).catch(() => { });
         }
 
+        // 2. Generate simulated data (Hyper-safe & Instant)
         const dataPoints = period === '1d' ? 50 : 30;
         let formattedData = [];
-        let simPrice = anchorPrice;
+        let simPrice = anchorPrice || 1000;
+
         for (let i = 0; i < dataPoints; i++) {
-            formattedData.push({ time: i, value: parseFloat(simPrice.toFixed(2)) });
-            simPrice = simPrice / (1 + (Math.random() - 0.48) * 0.005);
+            formattedData.push({
+                time: i,
+                value: parseFloat(simPrice.toFixed(2))
+            });
+            simPrice = simPrice * (1 + (Math.random() - 0.49) * 0.01);
         }
+
         formattedData.reverse();
         res.json(formattedData);
-    } catch (e) {
-        res.status(500).json({ error: 'Failed' });
+    } catch (err) {
+        res.status(500).json([]);
     }
 });
 
