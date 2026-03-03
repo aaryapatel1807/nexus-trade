@@ -51,10 +51,14 @@ export function Dashboard() {
             if (activeStock && activeStock.sym) {
                 sym = activeStock.sym.includes('.NS') ? activeStock.sym : `${activeStock.sym}.NS`
             }
+            // Map UI timeframe labels to backend range parameter
+            const rangeMap = { '1D': '1D', '1W': '1W', '1M': '1M', '3M': '3M', '1Y': '1Y', 'ALL': 'ALL' };
+            const range = rangeMap[activeChartTimeframe] || '1M';
+
             setIsChartLoading(true)
             try {
                 const res = await apiFetch(
-                    `/api/stocks/history?symbol=${sym}&period=${activeChartTimeframe.toLowerCase()}`,
+                    `/api/stock/history/${sym.replace('.NS', '')}?range=${range}`,
                     { signal: controller.signal }
                 )
                 const data = await res.json()
@@ -183,7 +187,26 @@ export function Dashboard() {
                             )}
                             <ResponsiveContainer width="100%" height="100%">
                                 <LineChart data={chartData}>
-                                    <XAxis dataKey="time" stroke="#8f9bb3" fontSize={12} tickLine={false} axisLine={false} />
+                                    <XAxis
+                                        dataKey="time"
+                                        stroke="#8f9bb3"
+                                        fontSize={11}
+                                        tickLine={false}
+                                        axisLine={false}
+                                        tickFormatter={(ts) => {
+                                            const d = new Date(ts * 1000);
+                                            if (activeChartTimeframe === '1D') {
+                                                return d.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' });
+                                            } else if (activeChartTimeframe === '1W') {
+                                                return d.toLocaleDateString('en-IN', { weekday: 'short', day: 'numeric' });
+                                            } else if (activeChartTimeframe === '1M' || activeChartTimeframe === '3M') {
+                                                return d.toLocaleDateString('en-IN', { day: 'numeric', month: 'short' });
+                                            } else {
+                                                return d.toLocaleDateString('en-IN', { month: 'short', year: '2-digit' });
+                                            }
+                                        }}
+                                        interval="preserveStartEnd"
+                                    />
                                     <YAxis domain={['auto', 'auto']} stroke="#8f9bb3" fontSize={12} tickLine={false} axisLine={false} tickFormatter={(val) => `₹${val}`} />
                                     <Tooltip
                                         contentStyle={{ backgroundColor: '#1A1D2D', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '8px', color: '#fff' }}
