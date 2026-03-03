@@ -455,4 +455,5 @@ const server = app.listen(PORT, '0.0.0.0', () => {
     startUpdateJob();
 });
 
-module.exports = server;
+// Export server instance for testing or external control
+export default server;
