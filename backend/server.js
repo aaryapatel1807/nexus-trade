@@ -50,6 +50,8 @@ app.use('/api/auth', authRoutes);
 app.use('/api/trade', tradeRoutes);
 app.use('/api/chat', chatRoutes);
 
+const PORT = process.env.PORT || 5000;
+
 import { readFileSync, writeFileSync, existsSync } from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
