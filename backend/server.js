@@ -90,7 +90,13 @@ const TOP_NSE_STOCKS = [
     'LTIM.NS', 'POWERGRID.NS', 'TATASTEEL.NS', 'HDFCLIFE.NS', 'SBILIFE.NS'
 ];
 
-import yahooFinance from 'yahoo-finance2';
+import YahooFinance from 'yahoo-finance2';
+const yf = new YahooFinance();
+const yf_history = new YahooFinance(); // Dedicated history instance
+
+// Cache for historical data (10 min TTL)
+const HISTORY_CACHE = new Map();
+const HISTORY_TTL = 10 * 60 * 1000;
 
 // --- ROBUST GOOGLE FINANCE SCRAPER ---
 async function fetchGoogleFinanceQuote(sym) {
@@ -261,38 +267,76 @@ app.get('/api/stocks/history', async (req, res) => {
     const symbol = req.query.symbol || 'RELIANCE.NS';
     const period = (req.query.period || '1m').toLowerCase();
     const clean = symbol.replace('.NS', '').replace('.BO', '');
+    const cacheKey = `${clean}-${period}`;
 
     try {
-        // 1. Get current price (HYPER-FAST: No Scraping on Request)
-        let anchorPrice = 1000;
-        const cached = GLOBAL_STOCK_CACHE.get(clean);
-
-        if (cached && cached.price > 0) {
-            anchorPrice = cached.price;
-        } else {
-            // Trigger background refresh for next time, but don't wait
-            fetchGoogleFinanceQuote(symbol).then(q => {
-                if (q) GLOBAL_STOCK_CACHE.set(clean, { ...GLOBAL_STOCK_CACHE.get(clean), price: q.regularMarketPrice, lastUpdated: new Date().toISOString() });
-            }).catch(() => { });
+        // 1. Check Cache
+        const cached = HISTORY_CACHE.get(cacheKey);
+        if (cached && (Date.now() - cached.timestamp < HISTORY_TTL)) {
+            return res.json(cached.data);
         }
 
-        // 2. Generate simulated data (Hyper-safe & Instant)
-        const dataPoints = period === '1d' ? 50 : 30;
-        let formattedData = [];
-        let simPrice = anchorPrice || 1000;
+        // 2. Calculate Dates (Standard Date objects are most reliable for all library versions)
+        const now = new Date();
+        let period1;
+        let interval = '1d';
 
-        for (let i = 0; i < dataPoints; i++) {
-            formattedData.push({
-                time: i,
-                value: parseFloat(simPrice.toFixed(2))
+        switch (period) {
+            case '1d':
+                period1 = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+                interval = '5m';
+                break;
+            case '1w':
+                period1 = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+                interval = '1h';
+                break;
+            case '1m':
+                period1 = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+                interval = '1d';
+                break;
+            case '3m':
+                period1 = new Date(now.getTime() - 90 * 24 * 60 * 60 * 1000);
+                interval = '1d';
+                break;
+            case '1y':
+                period1 = new Date(now.getTime() - 365 * 24 * 60 * 60 * 1000);
+                interval = '1wk';
+                break;
+            default:
+                period1 = new Date(now.getTime() - 1825 * 24 * 60 * 60 * 1000); // 5y
+                interval = '1mo';
+        }
+
+        // 3. Fetch with Date objects
+        console.log(`[BACKEND] Fetching ${symbol} from ${period1.toISOString()} to ${now.toISOString()} (${interval})`);
+        const result = await yf_history.chart(symbol, {
+            period1,
+            period2: now,
+            interval
+        });
+
+        if (!result || !result.quotes || result.quotes.length === 0) {
+            throw new Error('Empty dataset');
+        }
+
+        console.log(`[BACKEND] Got ${result.quotes.length} quotes for ${symbol}`);
+
+        // 4. Format
+        const data = result.quotes
+            .filter(q => q.close !== null)
+            .map(q => {
+                const date = new Date(q.date);
+                let lbl = date.toLocaleDateString([], { month: 'short', day: 'numeric' });
+                if (period === '1d') lbl = date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+                return { time: lbl, value: parseFloat(q.close.toFixed(2)) };
             });
-            simPrice = simPrice * (1 + (Math.random() - 0.49) * 0.01);
-        }
 
-        formattedData.reverse();
-        res.json(formattedData);
+        HISTORY_CACHE.set(cacheKey, { data, timestamp: Date.now() });
+        res.json(data);
     } catch (err) {
-        res.status(500).json([]);
+        console.error(`[BACKEND-ERR] Chart for ${symbol}:`, err.message);
+        const live = GLOBAL_STOCK_CACHE.get(clean);
+        res.json([{ time: 'Live', value: live?.price || 1000 }]);
     }
 });
 
