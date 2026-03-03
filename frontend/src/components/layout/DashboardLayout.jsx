@@ -247,29 +247,6 @@ export function DashboardLayout({ children }) {
         }
     };
 
-    // Live header indices
-    const [hdr, setHdr] = useState({ nifty: null, sensex: null, vix: null })
-    useEffect(() => {
-        const fetchData = async () => {
-            try {
-                const res = await apiFetch(`/api/stocks?symbols=${encodeURIComponent('^NSEI,^BSESN,^VIX')}`)
-                const data = await res.json()
-                if (Array.isArray(data)) {
-                    const n = data.find(d => d.sym === '^NSEI')
-                    const s = data.find(d => d.sym === '^BSESN')
-                    const v = data.find(d => d.sym === '^VIX')
-                    setHdr({
-                        nifty: n ? { pct: (n.change || 0).toFixed(2), up: n.change >= 0 } : null,
-                        sensex: s ? { pct: (s.change || 0).toFixed(2), up: s.change >= 0 } : null,
-                        vix: v ? { pct: (v.change || 0).toFixed(2), up: v.change >= 0 } : null,
-                    })
-                }
-            } catch { }
-        }
-        fetchData()
-        const t = setInterval(fetchData, 60000)
-        return () => clearInterval(t)
-    }, [])
 
     return (
         <div className="flex bg-background h-screen overflow-hidden text-white">
@@ -359,28 +336,6 @@ export function DashboardLayout({ children }) {
 
                     {/* Quick Metrics & Profile */}
                     <div className="flex items-center gap-6 ml-auto">
-                        <div className="hidden sm:flex items-center gap-4 text-xs font-mono">
-                            <div className="flex items-center gap-2">
-                                <span className="text-text-muted">NIFTY</span>
-                                <span className={hdr.nifty ? (hdr.nifty.up ? 'text-success' : 'text-danger') : 'text-text-muted'}>
-                                    {hdr.nifty ? `${hdr.nifty.up ? '+' : ''}${hdr.nifty.pct}%` : '...'}
-                                </span>
-                            </div>
-                            <div className="flex items-center gap-2">
-                                <span className="text-text-muted">SENSEX</span>
-                                <span className={hdr.sensex ? (hdr.sensex.up ? 'text-success' : 'text-danger') : 'text-text-muted'}>
-                                    {hdr.sensex ? `${hdr.sensex.up ? '+' : ''}${hdr.sensex.pct}%` : '...'}
-                                </span>
-                            </div>
-                            <div className="flex items-center gap-2">
-                                <span className="text-text-muted">INDIA VIX</span>
-                                <span className={hdr.vix ? (hdr.vix.up ? 'text-danger' : 'text-success') : 'text-text-muted'}>
-                                    {hdr.vix ? `${hdr.vix.up ? '+' : ''}${hdr.vix.pct}%` : '...'}
-                                </span>
-                            </div>
-                        </div>
-
-                        <div className="w-px h-8 bg-white/10 hidden sm:block"></div>
 
                         <Link to="/settings" className="relative w-10 h-10 rounded-full bg-gradient-to-tr from-primary to-secondary p-[2px] hover:shadow-[0_0_20px_rgba(0,255,204,0.3)] transition-all group">
                             <div className="w-full h-full bg-background rounded-full overflow-hidden border-2 border-background">
