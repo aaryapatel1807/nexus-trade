@@ -10,13 +10,39 @@ const app = express();
 
 app.use(cors({
     origin: (origin, callback) => {
-        if (!origin || origin.startsWith('http://localhost') || origin.endsWith('.onrender.com') || origin === process.env.FRONTEND_URL) {
+        // Allow requests without origin (SSR, mobile apps)
+        if (!origin) return callback(null, true);
+
+        const allowedPatterns = [
+            /^http:\/\/localhost(:\d+)?$/,  // localhost variants
+            /\.onrender\.com$/,              // Render deployment
+            /\.vercel\.app$/,                // Vercel deployment
+        ];
+
+        // Add environment-based URLs
+        if (process.env.FRONTEND_URL) {
+            try {
+                allowedPatterns.push(new URL(process.env.FRONTEND_URL).origin);
+            } catch (e) {
+                console.warn('[CORS] Invalid FRONTEND_URL:', e.message);
+            }
+        }
+
+        const isAllowed = allowedPatterns.some(pattern => {
+            if (pattern instanceof RegExp) return pattern.test(origin);
+            return pattern === origin;
+        });
+
+        if (isAllowed) {
             callback(null, true);
         } else {
+            console.warn(`[CORS] Blocked origin: ${origin}`);
             callback(new Error(`CORS: Origin ${origin} not allowed`));
         }
     },
-    credentials: true
+    credentials: true,
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization']
 }));
 app.use(express.json());
 
@@ -57,12 +83,23 @@ let ALL_NSE_STOCKS = [];
 let GLOBAL_STOCK_CACHE = new Map();
 const CACHE_FILE = path.join(__dirname, 'stock-cache.json');
 
+let cacheWriteInProgress = false;
+
 function saveCacheToDisk() {
+    if (cacheWriteInProgress) {
+        console.debug('[CACHE] Write already in progress, skipping...');
+        return;
+    }
+    
+    cacheWriteInProgress = true;
     try {
         const obj = Object.fromEntries(GLOBAL_STOCK_CACHE);
         writeFileSync(CACHE_FILE, JSON.stringify(obj, null, 2));
+        console.debug('[CACHE] Saved to disk');
     } catch (e) {
         console.error('Failed to save cache:', e.message);
+    } finally {
+        cacheWriteInProgress = false;
     }
 }
 
@@ -357,24 +394,29 @@ app.get('/api/stock/history/:symbol', async (req, res) => {
 async function updateTopStocks() {
     console.log('[UPDATE] Starting top stock refresh...');
     for (const sym of TOP_NSE_STOCKS) {
-        const quote = await fetchStockQuote(sym);
-        if (quote) {
-            const clean = sym.replace('.NS', '');
-            const existing = GLOBAL_STOCK_CACHE.get(clean) || {};
-            // Ensure price is always a number, never a string
-            const price = parseFloat(quote.regularMarketPrice);
-            if (!Number.isFinite(price) || price < 0) {
-                console.warn(`[UPDATE] Invalid price for ${sym}: ${quote.regularMarketPrice}`);
-                return;
+        try {
+            const quote = await fetchStockQuote(sym);
+            if (quote) {
+                const clean = sym.replace('.NS', '').replace('%26', '&');
+                const existing = GLOBAL_STOCK_CACHE.get(clean) || {};
+                // Ensure price is always a number, never a string
+                const price = parseFloat(quote.regularMarketPrice);
+                if (!Number.isFinite(price) || price < 0) {
+                    console.warn(`[UPDATE] Invalid price for ${sym}: ${quote.regularMarketPrice}`);
+                    continue;
+                }
+                GLOBAL_STOCK_CACHE.set(clean, {
+                    ...existing,
+                    symbol: clean,  // ← Ensure symbol field exists
+                    name: existing.name || quote.shortName || clean,
+                    price: price,  // ← Store as float, not string
+                    changePct: parseFloat(quote.regularMarketChangePercent) || 0,
+                    lastUpdated: new Date().toISOString()
+                });
             }
-            GLOBAL_STOCK_CACHE.set(clean, {
-                ...existing,
-                symbol: clean,  // ← Ensure symbol field exists
-                name: existing.name || quote.shortName || clean,
-                price: price,  // ← Store as float, not string
-                changePct: parseFloat(quote.regularMarketChangePercent) || 0,
-                lastUpdated: new Date().toISOString()
-            });
+        } catch (e) {
+            console.error(`[UPDATE] Failed to fetch ${sym}:`, e.message);
+            continue;
         }
         await new Promise(r => setTimeout(r, 300)); // gentle throttle
     }
@@ -382,46 +424,36 @@ async function updateTopStocks() {
     console.log('[UPDATE] Top stock refresh complete.');
 }
 
-setInterval(updateTopStocks, 5 * 60 * 1000);
-updateTopStocks();
+let updateJobHandle = null;
 
-// ─────────────────────────────────────────────────────────────
-//  ROUTES
-// ─────────────────────────────────────────────────────────────
-app.get('/api/stocks', (req, res) => {
-    res.json(Array.from(GLOBAL_STOCK_CACHE.values()));
-});
-
-app.get('/api/stocks/top', (req, res) => {
-    const top = TOP_NSE_STOCKS.map(s => GLOBAL_STOCK_CACHE.get(s.replace('.NS', '').replace('%26', '&'))).filter(Boolean);
-    res.json(top);
-});
-
-app.get('/api/stock/:symbol', async (req, res) => {
-    const { symbol } = req.params;
-    const fullSym = symbol.includes('.') ? symbol : (symbol.startsWith('^') ? symbol : symbol + '.NS');
-    const quote = await fetchStockQuote(fullSym);
-    if (!quote) return res.status(404).json({ error: 'Stock not found' });
-    res.json(quote);
-});
-
-// ─────────────────────────────────────────────────────────────
-//  UTILITIES
-// ─────────────────────────────────────────────────────────────
-async function fetchWithTimeout(url, options = {}, timeout = 5000) {
-    const controller = new AbortController();
-    const id = setTimeout(() => controller.abort(), timeout);
-    try {
-        const response = await fetch(url, { ...options, signal: controller.signal });
-        clearTimeout(id);
-        return response;
-    } catch (error) {
-        clearTimeout(id);
-        throw error;
-    }
+// Start update job
+function startUpdateJob() {
+    updateJobHandle = setInterval(updateTopStocks, 5 * 60 * 1000);
+    updateTopStocks(); // Initial run
 }
 
-const PORT = process.env.PORT || 5000;
-app.listen(PORT, '0.0.0.0', () => {
-    console.log(`🚀 Server running on port ${PORT}`);
+// Graceful shutdown handlers
+process.on('SIGTERM', async () => {
+    console.log('🛑 SIGTERM received - shutting down gracefully...');
+    if (updateJobHandle) {
+        clearInterval(updateJobHandle);
+    }
+    saveCacheToDisk();
+    process.exit(0);
 });
+
+process.on('SIGINT', async () => {
+    console.log('🛑 SIGINT received - shutting down gracefully...');
+    if (updateJobHandle) {
+        clearInterval(updateJobHandle);
+    }
+    saveCacheToDisk();
+    process.exit(0);
+});
+
+const server = app.listen(PORT, '0.0.0.0', () => {
+    console.log(`🚀 Server running on port ${PORT}`);
+    startUpdateJob();
+});
+
+module.exports = server;

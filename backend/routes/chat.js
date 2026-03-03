@@ -4,7 +4,10 @@ import { GoogleGenAI } from '@google/genai';
 import prisma from '../prisma.js';
 
 const router = express.Router();
-const JWT_SECRET = process.env.JWT_SECRET || 'nexus-trade-super-secret-key-change-me';
+const JWT_SECRET = process.env.JWT_SECRET;
+if (!JWT_SECRET) {
+    throw new Error('FATAL: JWT_SECRET environment variable is required. Set it in .env or your deployment platform.');
+}
 
 // Models ordered by quality (will try each on rate limit)
 const MODELS = ['gemini-2.5-flash', 'gemini-2.0-flash'];
@@ -65,6 +68,11 @@ Format your answers in markdown. Add disclaimers for high-risk recommendations.`
 
         // Try every key × every model until one succeeds
         for (const apiKey of API_KEYS) {
+            // Validate API key before use
+            if (!apiKey || typeof apiKey !== 'string' || apiKey.length < 10) {
+                console.warn('[AI] Skipping invalid API key format');
+                continue;
+            }
             const ai = new GoogleGenAI({ apiKey });
             for (const model of MODELS) {
                 try {

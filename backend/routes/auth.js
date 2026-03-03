@@ -4,7 +4,10 @@ import jwt from 'jsonwebtoken';
 import prisma from '../prisma.js';
 
 const router = express.Router();
-const JWT_SECRET = process.env.JWT_SECRET || 'nexus-trade-super-secret-key-change-me';
+const JWT_SECRET = process.env.JWT_SECRET;
+if (!JWT_SECRET) {
+    throw new Error('FATAL: JWT_SECRET environment variable is required. Set it in .env or your deployment platform.');
+}
 
 // Register User
 router.post('/register', async (req, res) => {

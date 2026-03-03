@@ -62,7 +62,7 @@ function TradeHistoryModal({ onClose }) {
                                         <td className="p-3 text-right font-mono">{t.quantity}</td>
                                         <td className="p-3 text-right font-mono">₹{parseFloat(t.price).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</td>
                                         <td className="p-3 text-right font-mono">₹{(t.quantity * t.price).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</td>
-                                        <td className="p-3 text-text-muted text-xs">{new Date(t.createdAt).toLocaleDateString('en-IN')}</td>
+                                        <td className="p-3 text-text-muted text-xs">{new Date(t.timestamp).toLocaleDateString('en-IN')}</td>
                                     </tr>
                                 ))}
                             </tbody>

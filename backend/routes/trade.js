@@ -3,7 +3,10 @@ import prisma from '../prisma.js';
 import jwt from 'jsonwebtoken';
 
 const router = express.Router();
-const JWT_SECRET = process.env.JWT_SECRET || 'nexus-trade-super-secret-key-change-me';
+const JWT_SECRET = process.env.JWT_SECRET;
+if (!JWT_SECRET) {
+    throw new Error('FATAL: JWT_SECRET environment variable is required. Set it in .env or your deployment platform.');
+}
 
 // Auth Middleware
 const authenticateToken = (req, res, next) => {
@@ -24,17 +27,43 @@ router.post('/execute', authenticateToken, async (req, res) => {
     const { symbol, type, quantity, price } = req.body;
     const userId = req.user.id;
 
-    if (!symbol || !type || !quantity || !price) {
+    // Validate required fields
+    if (!symbol || !type || !quantity || price === undefined) {
         return res.status(400).json({ error: 'Symbol, type (BUY/SELL), quantity, and price are required' });
+    }
+
+    // Validate symbol format
+    if (typeof symbol !== 'string' || symbol.length === 0 || symbol.length > 20) {
+        return res.status(400).json({ error: 'Invalid symbol format' });
+    }
+
+    // Validate type
+    const normalizedType = String(type).toUpperCase();
+    if (!['BUY', 'SELL'].includes(normalizedType)) {
+        return res.status(400).json({ error: 'Type must be BUY or SELL' });
     }
 
     const qty = parseInt(quantity, 10);
     const prc = parseFloat(price);
+
+    // Validate quantity
+    if (!Number.isFinite(qty) || qty <= 0 || qty > 10000000) {
+        return res.status(400).json({ error: 'Invalid quantity (must be 1-10000000)' });
+    }
+
+    // Validate price
+    if (!Number.isFinite(prc) || prc <= 0 || prc > 10000000) {
+        return res.status(400).json({ error: 'Invalid price (must be positive)' });
+    }
+
     const totalValue = qty * prc;
 
-    if (qty <= 0 || prc <= 0) {
-        return res.status(400).json({ error: 'Invalid quantity or price' });
+    // Final sanity check
+    if (!Number.isFinite(totalValue) || totalValue > 100000000000) {
+        return res.status(400).json({ error: 'Transaction value exceeds maximum limit' });
     }
+
+
 
     try {
         // Start an atomic DB Transaction
@@ -146,7 +175,7 @@ router.get('/history', authenticateToken, async (req, res) => {
         const userId = req.user.id;
         const trades = await prisma.transaction.findMany({
             where: { userId },
-            orderBy: { createdAt: 'desc' },
+            orderBy: { timestamp: 'desc' },
             take: 100
         });
         res.json(trades);
