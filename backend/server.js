@@ -195,63 +195,84 @@ async function getNSECookie() {
 }
 
 // ─────────────────────────────────────────────────────────────
-//  PRIMARY: NSE INDIA API QUOTE
+//  PRIMARY: YAHOO FINANCE RAW JSON API (works from any IP globally)
+//  Uses query1.finance.yahoo.com directly — NOT the yahoo-finance2 library
+//  The library had a routing bug; the raw API endpoint is reliable.
 // ─────────────────────────────────────────────────────────────
-async function fetchNSEQuote(symbol) {
-    // symbol should be plain e.g. "RELIANCE" (no .NS)
-    const sym = symbol.replace('.NS', '').replace('.BO', '').replace('%26', '&');
-    const cookie = await getNSECookie();
-    if (!cookie) return null; // Can't proceed without session
 
-    const endpoints = [
-        `https://www.nseindia.com/api/quote-equity?symbol=${encodeURIComponent(sym)}`,
-        `https://www.nseindia.com/api/quote-equity?symbol=${encodeURIComponent(sym)}&series=EQ`,
-    ];
+// Stocks whose price can legitimately exceed 15,000 INR
+const HIGH_VALUE_STOCKS = new Set(['MRF', 'PAGEIND', 'HONAUT', 'MARUTI', 'SHREECEM', 'NESTLEIND']);
+const NSE_PRICE_CEILING = 75000;  // Hard absolute maximum for any NSE stock
+const NSE_PRICE_CEILING_DEFAULT = 30000; // Max for most stocks
 
-    for (const url of endpoints) {
-        try {
-            const r = await fetchWithTimeout(url, {
-                headers: { ...NSE_HEADERS, 'Cookie': cookie }
-            }, 7000);
-
-            if (!r.ok) {
-                console.warn(`[NSE] HTTP ${r.status} for ${sym} at ${url}`);
-                continue;
-            }
-
-            const data = await r.json();
-
-            // The NSE API returns priceInfo for equity stocks
-            const price = data?.priceInfo?.lastPrice;
-            const changePct = data?.priceInfo?.pChange ?? data?.priceInfo?.change ?? 0;
-            const companyName = data?.info?.companyName || data?.metadata?.companyName || sym;
-
-            if (!price || price <= 0) continue;
-
-            console.log(`[NSE ✅] ${sym}: ₹${price}`);
-            return {
-                regularMarketPrice: price,
-                regularMarketChangePercent: changePct,
-                shortName: companyName,
-                marketCap: 'N/A',
-                trailingPE: data?.metadata?.pdSymbolPe || 'N/A',
-                dayHigh: data?.priceInfo?.dayHigh || price,
-                dayLow: data?.priceInfo?.dayLow || price,
-                exchange: 'NSE'
-            };
-        } catch (e) {
-            console.warn(`[NSE] Error for ${sym}: ${e.message}`);
-        }
+function isValidNSEPrice(price, symbol) {
+    if (!price || isNaN(price) || price <= 0) return false;
+    const sym = symbol.replace('.NS', '').replace('.BO', '').toUpperCase();
+    const ceiling = HIGH_VALUE_STOCKS.has(sym) ? NSE_PRICE_CEILING : NSE_PRICE_CEILING_DEFAULT;
+    if (price > ceiling) {
+        console.warn(`[VALIDATE] Rejected ${sym}: ₹${price} exceeds ceiling ₹${ceiling}`);
+        return false;
     }
-    return null;
+    return true;
+}
+
+async function fetchYahooQuote(symbol) {
+    // Always use .NS suffix for NSE stocks
+    const yfSym = symbol.includes('.') ? symbol : `${symbol}.NS`;
+    const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(yfSym)}?interval=1d&range=1d`;
+
+    try {
+        const r = await fetchWithTimeout(url, {
+            headers: {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                'Accept': 'application/json',
+            }
+        }, 8000);
+
+        if (!r.ok) {
+            console.warn(`[YF] HTTP ${r.status} for ${yfSym}`);
+            return null;
+        }
+
+        const data = await r.json();
+        const meta = data?.chart?.result?.[0]?.meta;
+        if (!meta) return null;
+
+        const price = meta.regularMarketPrice;
+        const currency = meta.currency;
+
+        // Strict currency check — must be INR
+        if (currency && currency !== 'INR') {
+            console.warn(`[YF] Rejected ${yfSym}: currency=${currency} (not INR)`);
+            return null;
+        }
+
+        if (!isValidNSEPrice(price, symbol)) return null;
+
+        const previousClose = meta.chartPreviousClose || meta.previousClose || price;
+        const changePct = previousClose > 0 ? ((price - previousClose) / previousClose) * 100 : 0;
+
+        console.log(`[YF ✅] ${yfSym}: ₹${price} (${changePct.toFixed(2)}%)`);
+        return {
+            regularMarketPrice: price,
+            regularMarketChangePercent: changePct,
+            shortName: meta.longName || meta.shortName || symbol,
+            marketCap: 'N/A',
+            trailingPE: 'N/A',
+            dayHigh: meta.regularMarketDayHigh || price,
+            dayLow: meta.regularMarketDayLow || price,
+            exchange: 'NSE'
+        };
+    } catch (e) {
+        console.warn(`[YF] Error for ${yfSym}: ${e.message}`);
+        return null;
+    }
 }
 
 // ─────────────────────────────────────────────────────────────
-//  FALLBACK: GOOGLE FINANCE SCRAPE
+//  FALLBACK: GOOGLE FINANCE SCRAPE (works globally)
 // ─────────────────────────────────────────────────────────────
-// Hard price limits — absolute maximum realistic NSE stock price
-const NSE_PRICE_CEILING = 75000; // Only MRF can reach this
-const NSE_HARD_FLOOR = 0.5;      // Sub-penny stocks are invalid
+const NSE_HARD_FLOOR = 0.5;
 
 async function fetchGoogleQuote(symbol) {
     const sym = symbol.replace('.NS', '').replace('.BO', '');
@@ -265,28 +286,24 @@ async function fetchGoogleQuote(symbol) {
                     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
                     'Accept-Language': 'en-US,en;q=0.9'
                 }
-            }, 6000);
+            }, 8000);
 
             if (!r.ok) continue;
             const html = await r.text();
 
-            // STRICT: Only match inside the designated live-price container
+            // Target the precise live-price container
             const priceMatch = html.match(/jsname="ip75Cb"[^>]*>₹([0-9,.]+)</);
             if (!priceMatch) continue;
 
             const price = parseFloat(priceMatch[1].replace(/,/g, ''));
 
-            // Hard guards
-            if (price < NSE_HARD_FLOOR || price > NSE_PRICE_CEILING) {
-                console.warn(`[GF] Price ${price} out of bounds for ${sym}`);
-                continue;
-            }
+            if (!isValidNSEPrice(price, sym)) continue;
 
-            // Title guard: page title should NOT contain index keywords
+            // Title guard: reject if page is an index, not a stock
             const titleMatch = html.match(/<title>([^<]+)\|/);
             const title = (titleMatch?.[1] || '').toUpperCase();
-            if (title.includes('INDEX') || title.includes('DOW') || title.includes('S&P') || title.includes('SENSEX') || title.includes('NIFTY')) {
-                console.warn(`[GF] Index title detected for ${sym}: ${title}`);
+            if (title.includes('INDEX') || title.includes('DOW') || title.includes('S&P')) {
+                console.warn(`[GF] Index title for ${sym}: ${title}`);
                 continue;
             }
 
@@ -311,14 +328,14 @@ async function fetchGoogleQuote(symbol) {
 }
 
 // ─────────────────────────────────────────────────────────────
-//  MAIN QUOTE FUNCTION: NSE -> Google Finance
+//  MAIN QUOTE FUNCTION: Yahoo Finance → Google Finance
 // ─────────────────────────────────────────────────────────────
 async function fetchStockQuote(sym) {
     const cleanSym = sym.replace('.NS', '').replace('.BO', '');
 
-    // 1. Try NSE India API (guaranteed INR, guaranteed stock data)
-    const nseResult = await fetchNSEQuote(cleanSym);
-    if (nseResult) return nseResult;
+    // 1. Yahoo Finance raw JSON API (works globally, strict INR validation)
+    const yfResult = await fetchYahooQuote(cleanSym);
+    if (yfResult) return yfResult;
 
     // 2. Google Finance scrape as fallback
     const gfResult = await fetchGoogleQuote(cleanSym);
