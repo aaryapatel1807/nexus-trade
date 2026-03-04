@@ -19,11 +19,14 @@ export function TickerTape() {
                 const res = await apiFetch('/api/stocks?symbols=RELIANCE.NS,TCS.NS,HDFCBANK.NS,INFY.NS,SBIN.NS,BHARTIARTL.NS,ITC.NS')
                 const data = await res.json()
                 if (data && data.length > 0) {
-                    setTickers(data.map(t => ({
-                        sym: t.sym.replace('.NS', ''),
-                        price: t.price || 0,
-                        change: t.change || 0
-                    })))
+                    setTickers(data.map(t => {
+                        const sym = t.sym || t.symbol || '';
+                        return {
+                            sym: sym.replace('.NS', ''),
+                            price: t.price || 0,
+                            change: t.changePct ?? t.change ?? 0
+                        };
+                    }))
                 }
             } catch (err) {
                 console.error("Failed to fetch live tickers", err)
