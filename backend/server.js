@@ -27,9 +27,14 @@ app.use(cors({
         // Add environment-based URLs
         if (process.env.FRONTEND_URL) {
             try {
-                allowedPatterns.push(new URL(process.env.FRONTEND_URL).origin);
+                let frontendUrl = process.env.FRONTEND_URL.trim();
+                // Add https:// prefix if missing so new URL() doesn't throw "Invalid URL"
+                if (!frontendUrl.startsWith('http://') && !frontendUrl.startsWith('https://')) {
+                    frontendUrl = 'https://' + frontendUrl;
+                }
+                allowedPatterns.push(new URL(frontendUrl).origin);
             } catch (e) {
-                console.warn('[CORS] Invalid FRONTEND_URL:', e.message);
+                console.warn(`[CORS] Invalid FRONTEND_URL (${process.env.FRONTEND_URL}):`, e.message);
             }
         }
 
@@ -346,6 +351,33 @@ async function fetchStockQuote(sym) {
     // 2. Google Finance scrape as fallback
     const gfResult = await fetchGoogleQuote(cleanSym);
     if (gfResult) return gfResult;
+
+    // 3. Final Fallback: yahoo-finance2 library (handles crumbs automatically)
+    // Safe to use now because we strictly validate currency and price bounds.
+    try {
+        const yfSym = cleanSym.includes('.') ? cleanSym : `${cleanSym}.NS`;
+        const q = await yf_history.quote(yfSym);
+        const price = q?.regularMarketPrice;
+
+        if (q && price > 0 && q.currency === 'INR' && isValidNSEPrice(price, cleanSym)) {
+            const previousClose = q?.regularMarketPreviousClose || price;
+            const changePct = previousClose > 0 ? ((price - previousClose) / previousClose) * 100 : (q?.regularMarketChangePercent || 0);
+
+            console.log(`[YF-LIB ✅] ${yfSym}: ₹${price} (${changePct.toFixed(2)}%)`);
+            return {
+                regularMarketPrice: price,
+                regularMarketChangePercent: changePct,
+                shortName: q.longName || q.shortName || cleanSym,
+                marketCap: 'N/A',
+                trailingPE: 'N/A',
+                dayHigh: q.regularMarketDayHigh || price,
+                dayLow: q.regularMarketDayLow || price,
+                exchange: 'NSE'
+            };
+        }
+    } catch (e) {
+        console.warn(`[YF-LIB] Final fallback failed for ${cleanSym}: ${e.message}`);
+    }
 
     console.error(`[QUOTE] All sources failed for ${cleanSym}`);
     return null;
