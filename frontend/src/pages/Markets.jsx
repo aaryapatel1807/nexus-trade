@@ -54,18 +54,20 @@ export function Markets() {
                         const newIndices = [...prev];
 
                         data.forEach(d => {
-                            const isUp = d.change >= 0;
+                            const changePct = d.changePct ?? d.change ?? 0;
+                            const isUp = changePct >= 0;
                             const formattedPrice = (d.price || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-                            const formattedChange = `${isUp ? '+' : ''}${(d.change || 0).toFixed(2)}%`;
-                            const points = Math.abs((d.price || 0) * ((d.change || 0) / 100)).toFixed(2);
+                            const formattedChange = `${isUp ? '+' : ''}${changePct.toFixed(2)}%`;
+                            const points = Math.abs((d.price || 0) * (changePct / 100)).toFixed(2);
+                            const sym = d.sym || d.symbol;
 
-                            if (d.sym === '^NSEI') {
+                            if (sym === '^NSEI') {
                                 newIndices[0] = { label: 'NIFTY 50', val: formattedPrice, change: formattedChange, up: isUp, points };
-                            } else if (d.sym === '^BSESN') {
+                            } else if (sym === '^BSESN') {
                                 newIndices[1] = { label: 'SENSEX', val: formattedPrice, change: formattedChange, up: isUp, points };
-                            } else if (d.sym === '^NSEBANK') {
+                            } else if (sym === '^NSEBANK') {
                                 newIndices[2] = { label: 'NIFTY BANK', val: formattedPrice, change: formattedChange, up: isUp, points };
-                            } else if (d.sym === '^CNXIT') {
+                            } else if (sym === '^CNXIT') {
                                 newIndices[3] = { label: 'NIFTY IT', val: formattedPrice, change: formattedChange, up: isUp, points };
                             }
                         });

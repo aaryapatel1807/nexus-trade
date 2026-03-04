@@ -391,7 +391,38 @@ async function fetchStockQuote(sym) {
 app.get('/api/health', (req, res) => res.json({ status: 'ok', stocks: GLOBAL_STOCK_CACHE.size }));
 
 // Alias: Render health check is configured to /api/stocks — must return 200
-app.get('/api/stocks', (req, res) => {
+app.get('/api/stocks', async (req, res) => {
+    // If specific symbols are requested (e.g., ^NSEI,^BSESN from Markets.jsx)
+    if (req.query.symbols) {
+        const syms = req.query.symbols.split(',').map(s => s.trim());
+        const results = [];
+
+        for (const sym of syms) {
+            const cached = GLOBAL_STOCK_CACHE.get(sym);
+            if (cached && cached.price > 0 && (Date.now() - new Date(cached.lastUpdated).getTime() < 5 * 60 * 1000)) {
+                results.push(cached);
+                continue;
+            }
+            // Fetch live if missing or stale
+            const quote = await fetchStockQuote(sym);
+            if (quote) {
+                const newStock = {
+                    symbol: sym,
+                    name: quote.shortName || sym,
+                    price: quote.regularMarketPrice,
+                    changePct: quote.regularMarketChangePercent,
+                    dayHigh: quote.dayHigh,
+                    dayLow: quote.dayLow,
+                    lastUpdated: new Date().toISOString()
+                };
+                GLOBAL_STOCK_CACHE.set(sym, newStock);
+                results.push(newStock);
+            }
+        }
+        return res.json(results);
+    }
+
+    // Default: return all cached stocks with valid prices
     const stocks = Array.from(GLOBAL_STOCK_CACHE.values()).filter(s => s.price > 0);
     res.json(stocks);
 });

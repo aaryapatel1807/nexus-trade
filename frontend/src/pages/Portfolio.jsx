@@ -99,14 +99,14 @@ export function Portfolio() {
                         const liveRes = await apiFetch(`/api/stock/${h.symbol}`);
                         if (!liveRes.ok) throw new Error('Failed to fetch');
                         const live = await liveRes.json();
-                        // Use regularMarketPrice from the API response (NOT cached value)
-                        const currentPrice = live?.regularMarketPrice || h.averagePrice;
+                        // Use the simplified 'price' field returned by the new backend API endpoints
+                        const currentPrice = live?.price || h.averagePrice;
                         if (!Number.isFinite(currentPrice) || currentPrice <= 0) {
                             throw new Error('Invalid price');
                         }
                         const value = h.quantity * currentPrice;
                         const change = h.averagePrice > 0 ? ((currentPrice - h.averagePrice) / h.averagePrice) * 100 : 0;
-                        const todayChangePct = live?.regularMarketChangePercent || 0;
+                        const todayChangePct = live?.changePct || 0;
                         const prevClose = currentPrice / (1 + todayChangePct / 100);
                         const todayPnL = h.quantity * (currentPrice - prevClose);
 

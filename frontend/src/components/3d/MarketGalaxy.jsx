@@ -72,12 +72,13 @@ export function MarketGalaxy({ activeTab = 'Tech' }) {
         const fetchData = async () => {
             try {
                 const allSyms = SECTORS.flatMap(s => s.stocks.map(st => st.sym)).join(',')
-                const res = await apiFetch(`/api/scanner`)
+                const res = await apiFetch(`/api/stocks`)
                 const data = await res.json()
 
                 if (Array.isArray(data)) {
                     const changeMap = {}
-                    data.forEach(d => { changeMap[d.sym] = d.change })
+                    // Ensure we use the 'changePct' field returned by /api/stocks
+                    data.forEach(d => { changeMap[d.sym || d.symbol] = d.changePct ?? d.change ?? 0 })
 
                     setSectors(prev =>
                         prev.map(sector => ({
