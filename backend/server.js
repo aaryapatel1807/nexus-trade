@@ -212,6 +212,10 @@ const NSE_PRICE_CEILING_DEFAULT = 30000; // Max for most stocks
 
 function isValidNSEPrice(price, symbol) {
     if (!price || isNaN(price) || price <= 0) return false;
+
+    // Indices (starting with ^) are allowed to have any price
+    if (symbol.startsWith('^')) return true;
+
     const sym = symbol.replace('.NS', '').replace('.BO', '').toUpperCase();
     const ceiling = HIGH_VALUE_STOCKS.has(sym) ? NSE_PRICE_CEILING : NSE_PRICE_CEILING_DEFAULT;
     if (price > ceiling) {
@@ -222,8 +226,8 @@ function isValidNSEPrice(price, symbol) {
 }
 
 async function fetchYahooQuote(symbol) {
-    // Always use .NS suffix for NSE stocks
-    const yfSym = symbol.includes('.') ? symbol : `${symbol}.NS`;
+    // Indices don't need .NS. Everything else without a dot gets .NS
+    const yfSym = (symbol.includes('.') || symbol.startsWith('^')) ? symbol : `${symbol}.NS`;
     const YF_HEADERS = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
         'Accept': 'application/json',
@@ -251,8 +255,8 @@ async function fetchYahooQuote(symbol) {
             const price = meta?.regularMarketPrice ?? q?.regularMarketPrice;
             const currency = meta?.currency ?? q?.currency;
 
-            // Strict currency check — must be INR
-            if (currency && currency !== 'INR') {
+            // Strict currency check — must be INR for stocks. Indices don't have currency.
+            if (!symbol.startsWith('^') && currency && currency !== 'INR') {
                 console.warn(`[YF] Rejected ${yfSym}: currency=${currency} (not INR)`);
                 continue;
             }
@@ -355,11 +359,13 @@ async function fetchStockQuote(sym) {
     // 3. Final Fallback: yahoo-finance2 library (handles crumbs automatically)
     // Safe to use now because we strictly validate currency and price bounds.
     try {
-        const yfSym = cleanSym.includes('.') ? cleanSym : `${cleanSym}.NS`;
+        const yfSym = (cleanSym.includes('.') || cleanSym.startsWith('^')) ? cleanSym : `${cleanSym}.NS`;
         const q = await yf_history.quote(yfSym);
         const price = q?.regularMarketPrice;
 
-        if (q && price > 0 && q.currency === 'INR' && isValidNSEPrice(price, cleanSym)) {
+        const isCurrencyValid = cleanSym.startsWith('^') || q.currency === 'INR';
+
+        if (q && price > 0 && isCurrencyValid && isValidNSEPrice(price, cleanSym)) {
             const previousClose = q?.regularMarketPreviousClose || price;
             const changePct = previousClose > 0 ? ((price - previousClose) / previousClose) * 100 : (q?.regularMarketChangePercent || 0);
 
