@@ -90,7 +90,7 @@ function saveCacheToDisk() {
         console.debug('[CACHE] Write already in progress, skipping...');
         return;
     }
-    
+
     cacheWriteInProgress = true;
     try {
         const obj = Object.fromEntries(GLOBAL_STOCK_CACHE);
@@ -115,12 +115,12 @@ try {
 
     ALL_NSE_STOCKS.forEach(s => {
         if (!GLOBAL_STOCK_CACHE.has(s.symbol)) {
-            GLOBAL_STOCK_CACHE.set(s.symbol, { 
-                symbol: s.symbol, 
-                name: s.name, 
+            GLOBAL_STOCK_CACHE.set(s.symbol, {
+                symbol: s.symbol,
+                name: s.name,
                 price: null,  // ← Use null, not 0 - easier to detect uninitialized
-                changePct: 0, 
-                lastUpdated: null 
+                changePct: 0,
+                lastUpdated: null
             });
         }
     });
@@ -137,10 +137,28 @@ const TOP_NSE_STOCKS = [
     'LT', 'AXISBANK', 'ASIANPAINT', 'MARUTI', 'SUNPHARMA',
     'HCLTECH', 'WIPRO', 'TECHM', 'ONGC', 'NTPC', 'TATAMOTORS',
     'EICHERMOT', 'NESTLEIND', 'DRREDDY', 'CIPLA', 'BAJFINANCE',
-    'M%26M', 'ADANIENT', 'TITAN', 'ULTRACEMCO', 'JIOFIN',
+    'M&M', 'ADANIENT', 'TITAN', 'ULTRACEMCO', 'JIOFIN',
     'BAJAJ-AUTO', 'ADANIPORTS', 'COALINDIA', 'GRASIM', 'JSWSTEEL',
     'LTIM', 'POWERGRID', 'TATASTEEL', 'HDFCLIFE', 'SBILIFE'
 ];
+
+// ─────────────────────────────────────────────────────────────
+//  CORE UTILITY: fetchWithTimeout
+//  MUST be defined before any fetch functions that use it.
+// ─────────────────────────────────────────────────────────────
+async function fetchWithTimeout(url, options = {}, timeoutMs = 8000) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+        const response = await fetch(url, { ...options, signal: controller.signal });
+        clearTimeout(timer);
+        return response;
+    } catch (e) {
+        clearTimeout(timer);
+        if (e.name === 'AbortError') throw new Error(`Request timed out after ${timeoutMs}ms: ${url}`);
+        throw e;
+    }
+}
 
 // ─────────────────────────────────────────────────────────────
 //  NSE INDIA API HEADERS (required for session cookie)
