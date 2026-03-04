@@ -352,19 +352,113 @@ async function fetchStockQuote(sym) {
 }
 
 // ─────────────────────────────────────────────────────────────
+//  API ROUTES
+// ─────────────────────────────────────────────────────────────
+
+// Health check — Render uses this to verify the service is up
+app.get('/api/health', (req, res) => res.json({ status: 'ok', stocks: GLOBAL_STOCK_CACHE.size }));
+
+// Alias: Render health check is configured to /api/stocks — must return 200
+app.get('/api/stocks', (req, res) => {
+    const stocks = Array.from(GLOBAL_STOCK_CACHE.values()).filter(s => s.price > 0);
+    res.json(stocks);
+});
+
+// Top 5 stocks for the Dashboard watchlist (fixed list, always available)
+app.get('/api/stocks/top', (req, res) => {
+    const TOP = ['RELIANCE', 'TCS', 'HDFCBANK', 'INFY', 'SBIN'];
+    const results = TOP.map(sym => GLOBAL_STOCK_CACHE.get(sym)).filter(Boolean);
+    res.json(results);
+});
+
+// Single stock live quote with fallback to cache
+app.get('/api/stock/:symbol', async (req, res) => {
+    const sym = req.params.symbol.replace('.NS', '').replace('.BO', '');
+    try {
+        const cached = GLOBAL_STOCK_CACHE.get(sym);
+        // Return cache if fresh (< 5 min)
+        if (cached?.price > 0 && cached?.lastUpdated && (Date.now() - new Date(cached.lastUpdated).getTime()) < 5 * 60 * 1000) {
+            return res.json(cached);
+        }
+        // Fetch live
+        const quote = await fetchStockQuote(sym);
+        if (quote) {
+            const data = {
+                symbol: sym,
+                name: quote.shortName || sym,
+                price: quote.regularMarketPrice,
+                changePct: quote.regularMarketChangePercent,
+                dayHigh: quote.dayHigh,
+                dayLow: quote.dayLow,
+                lastUpdated: new Date().toISOString()
+            };
+            GLOBAL_STOCK_CACHE.set(sym, { ...GLOBAL_STOCK_CACHE.get(sym), ...data });
+            return res.json(data);
+        }
+        if (cached) return res.json(cached);
+        res.status(404).json({ error: `No data for ${sym}` });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+// Search stocks by name or symbol
+app.get('/api/search', (req, res) => {
+    const q = (req.query.q || '').toLowerCase().trim();
+    if (!q || q.length < 1) return res.json([]);
+    const results = ALL_NSE_STOCKS
+        .filter(s => s.symbol.toLowerCase().includes(q) || (s.name || '').toLowerCase().includes(q))
+        .slice(0, 20)
+        .map(s => ({
+            symbol: s.symbol,
+            name: s.name,
+            price: GLOBAL_STOCK_CACHE.get(s.symbol)?.price || null
+        }));
+    res.json(results);
+});
+
+// Scanner — returns top movers (biggest % change) from the cache
+app.get('/api/scanner', (req, res) => {
+    const stocks = Array.from(GLOBAL_STOCK_CACHE.values())
+        .filter(s => s.price > 0 && s.changePct != null)
+        .sort((a, b) => Math.abs(b.changePct) - Math.abs(a.changePct))
+        .slice(0, 20)
+        .map(s => ({ sym: s.symbol, name: s.name, price: s.price, change: s.changePct }));
+    res.json(stocks);
+});
+
+// News — fetch from Google Finance RSS feed
+app.get('/api/news', async (req, res) => {
+    try {
+        const r = await fetchWithTimeout(
+            'https://news.google.com/rss/search?q=India+stock+market+NSE+BSE&hl=en-IN&gl=IN&ceid=IN:en',
+            { headers: { 'User-Agent': 'Mozilla/5.0' } },
+            8000
+        );
+        const xml = await r.text();
+        const items = [];
+        const re = /<item>([\s\S]*?)<\/item>/g;
+        let m;
+        while ((m = re.exec(xml)) !== null && items.length < 10) {
+            const block = m[1];
+            const title = (block.match(/<title><!\[CDATA\[(.*?)\]\]><\/title>/) || block.match(/<title>(.*?)<\/title>/))?.[1] || '';
+            const link = (block.match(/<link>(.*?)<\/link>/) || [])[1] || '';
+            const pubDate = (block.match(/<pubDate>(.*?)<\/pubDate>/) || [])[1] || '';
+            const source = (block.match(/<source[^>]*>(.*?)<\/source>/) || [])[1] || 'News';
+            if (title && link) items.push({ title, link, publishedAt: new Date(pubDate).toISOString(), source });
+        }
+        res.json(items);
+    } catch (e) {
+        res.json([]);
+    }
+});
+
+// ─────────────────────────────────────────────────────────────
 //  CHART HISTORY (Yahoo Finance chart API — only used for history)
 // ─────────────────────────────────────────────────────────────
 const yf_history = new YahooFinance();
 const HISTORY_CACHE = new Map();
-const HISTORY_TTL = 10 * 60 * 1000;
-
-const INDEX_MAP = {
-    '^NSEI': 'NIFTY_50:INDEXNSE',
-    '^BSESN': 'SENSEX:INDEXBOM',
-    '^NSEBANK': 'NIFTY_BANK:INDEXNSE',
-    '^CNXIT': 'NIFTY_IT:INDEXNSE',
-    '^VIX': 'INDIAVIX:INDEXNSE'
-};
+const HISTORY_TTL = 10 * 60 * 1000; // 10 minutes
 
 app.get('/api/stock/history/:symbol', async (req, res) => {
     let { symbol } = req.params;
