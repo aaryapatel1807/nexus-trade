@@ -219,54 +219,60 @@ function isValidNSEPrice(price, symbol) {
 async function fetchYahooQuote(symbol) {
     // Always use .NS suffix for NSE stocks
     const yfSym = symbol.includes('.') ? symbol : `${symbol}.NS`;
-    const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(yfSym)}?interval=1d&range=1d`;
+    const YF_HEADERS = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        'Accept': 'application/json',
+    };
 
-    try {
-        const r = await fetchWithTimeout(url, {
-            headers: {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-                'Accept': 'application/json',
+    // Try v8/chart first, then fall back to v7/quote
+    const urls = [
+        `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(yfSym)}?interval=1d&range=1d`,
+        `https://query2.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(yfSym)}?interval=1d&range=1d`,
+        `https://query1.finance.yahoo.com/v7/finance/quote?symbols=${encodeURIComponent(yfSym)}`,
+    ];
+
+    for (const url of urls) {
+        try {
+            const r = await fetchWithTimeout(url, { headers: YF_HEADERS }, 8000);
+            if (!r.ok) { console.warn(`[YF] HTTP ${r.status} for ${yfSym} at ${url}`); continue; }
+
+            const data = await r.json();
+
+            // Handle v8/chart format
+            const meta = data?.chart?.result?.[0]?.meta;
+            // Handle v7/quote format
+            const q = data?.quoteResponse?.result?.[0];
+
+            const price = meta?.regularMarketPrice ?? q?.regularMarketPrice;
+            const currency = meta?.currency ?? q?.currency;
+
+            // Strict currency check — must be INR
+            if (currency && currency !== 'INR') {
+                console.warn(`[YF] Rejected ${yfSym}: currency=${currency} (not INR)`);
+                continue;
             }
-        }, 8000);
 
-        if (!r.ok) {
-            console.warn(`[YF] HTTP ${r.status} for ${yfSym}`);
-            return null;
+            if (!isValidNSEPrice(price, symbol)) continue;
+
+            const previousClose = meta?.chartPreviousClose || meta?.previousClose || q?.regularMarketPreviousClose || price;
+            const changePct = previousClose > 0 ? ((price - previousClose) / previousClose) * 100 : (q?.regularMarketChangePercent ?? 0);
+
+            console.log(`[YF ✅] ${yfSym}: ₹${price} (${changePct.toFixed(2)}%)`);
+            return {
+                regularMarketPrice: price,
+                regularMarketChangePercent: changePct,
+                shortName: meta?.longName || meta?.shortName || q?.longName || q?.shortName || symbol,
+                marketCap: 'N/A',
+                trailingPE: 'N/A',
+                dayHigh: meta?.regularMarketDayHigh || q?.regularMarketDayHigh || price,
+                dayLow: meta?.regularMarketDayLow || q?.regularMarketDayLow || price,
+                exchange: 'NSE'
+            };
+        } catch (e) {
+            console.warn(`[YF] Error for ${yfSym}: ${e.message}`);
         }
-
-        const data = await r.json();
-        const meta = data?.chart?.result?.[0]?.meta;
-        if (!meta) return null;
-
-        const price = meta.regularMarketPrice;
-        const currency = meta.currency;
-
-        // Strict currency check — must be INR
-        if (currency && currency !== 'INR') {
-            console.warn(`[YF] Rejected ${yfSym}: currency=${currency} (not INR)`);
-            return null;
-        }
-
-        if (!isValidNSEPrice(price, symbol)) return null;
-
-        const previousClose = meta.chartPreviousClose || meta.previousClose || price;
-        const changePct = previousClose > 0 ? ((price - previousClose) / previousClose) * 100 : 0;
-
-        console.log(`[YF ✅] ${yfSym}: ₹${price} (${changePct.toFixed(2)}%)`);
-        return {
-            regularMarketPrice: price,
-            regularMarketChangePercent: changePct,
-            shortName: meta.longName || meta.shortName || symbol,
-            marketCap: 'N/A',
-            trailingPE: 'N/A',
-            dayHigh: meta.regularMarketDayHigh || price,
-            dayLow: meta.regularMarketDayLow || price,
-            exchange: 'NSE'
-        };
-    } catch (e) {
-        console.warn(`[YF] Error for ${yfSym}: ${e.message}`);
-        return null;
     }
+    return null;
 }
 
 // ─────────────────────────────────────────────────────────────
